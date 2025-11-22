@@ -1,0 +1,8 @@
+[gd_scene load_steps=3 format=3 uid="uid://di62xjtst03uy"]
+
+[ext_resource type="Script" uid="uid://bbgj4odoaq70t" path="res://tools/BoardCoordinateGenerator.gd" id="1_p5eur"]
+[ext_resource type="Resource" uid="uid://qe2c1n3fv83l" path="res://board/data/board_layout_standard.tres" id="2_r8rrp"]
+
+[node name="GeneratorTool" type="Node"]
+script = ExtResource("1_p5eur")
+target_resource = ExtResource("2_r8rrp")
