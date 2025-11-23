@@ -1,14 +1,18 @@
 class_name BoardData
 extends Resource
 
-## The global position of the center of each square, ordered by ID (0 to 24).
-## We use an Array of Vector2 so we can support non-grid shapes (like the cross) easily.
+## The global position of the center of each square, ordered by ID.
 @export var square_coordinates: Array[Vector2]
 
-## The path pieces must follow. Each integer refers to an index in 'square_coordinates'.
-## Player 1 might follow path [0, 1, 2...] while Player 2 follows [6, 7, 8...]
+## The sequence of tile INDICES that Player 1 (Red/Bottom) follows.
+## Example: [22, 23, 24, ... 12]
 @export var p1_path: Array[int]
+
+## The sequence of tile INDICES that Player 2 (Blue/Top) follows.
 @export var p2_path: Array[int]
 
 ## The index of the square that is the "Home/Center".
 @export var home_index: int = 12
+
+## Safe zones where pieces cannot be cut (Optional, for future use)
+@export var safe_squares: Array[int]

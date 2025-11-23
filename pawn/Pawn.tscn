@@ -1,0 +1,15 @@
+[gd_scene load_steps=4 format=3 uid="uid://b048quf6cx25e"]
+
+[ext_resource type="Texture2D" uid="uid://ct4vxvtpm4m1j" path="res://assets/pawn.png" id="1_8ywjr"]
+[ext_resource type="Script" uid="uid://c1ti4w7jhfw72" path="res://pawn/Pawn.gd" id="1_rpg1p"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_rpg1p"]
+
+[node name="Pawn" type="Area2D"]
+script = ExtResource("1_rpg1p")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_8ywjr")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_rpg1p")

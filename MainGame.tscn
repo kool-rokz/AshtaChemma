@@ -1,0 +1,36 @@
+[gd_scene load_steps=4 format=3 uid="uid://ch73dk2skmecn"]
+
+[ext_resource type="PackedScene" uid="uid://b048quf6cx25e" path="res://pawn/Pawn.tscn" id="2_bqqt8"]
+[ext_resource type="PackedScene" uid="uid://cd3kwiikt180v" path="res://board/Board.tscn" id="3_8qpgq"]
+[ext_resource type="PackedScene" uid="uid://cjboufy2oqxwa" path="res://game_manager/GameManager.tscn" id="3_bqqt8"]
+
+[node name="Node2D" type="Node2D"]
+
+[node name="Board" parent="." instance=ExtResource("3_8qpgq")]
+position = Vector2(470, 207)
+
+[node name="GameManager" parent="." node_paths=PackedStringArray("board", "roll_button", "pawn_containers") instance=ExtResource("3_bqqt8")]
+board = NodePath("../Board")
+roll_button = NodePath("../ROLL")
+pawn_containers = [NodePath("../P1_Pawns"), NodePath("../P2_Pawns")]
+
+[node name="P1_Pawns" type="Node2D" parent="."]
+
+[node name="Pawn" parent="P1_Pawns" instance=ExtResource("2_bqqt8")]
+position = Vector2(343, 201)
+
+[node name="P2_Pawns" type="Node2D" parent="."]
+
+[node name="Pawn" parent="P2_Pawns" instance=ExtResource("2_bqqt8")]
+modulate = Color(0.02745098, 1, 1, 1)
+position = Vector2(344, 236)
+
+[node name="ROLL" type="Button" parent="."]
+offset_left = 608.0
+offset_top = 155.0
+offset_right = 657.0
+offset_bottom = 186.0
+text = "ROLL
+"
+
+[connection signal="pressed" from="ROLL" to="GameManager" method="_on_roll_pressed"]

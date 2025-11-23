@@ -11,6 +11,7 @@ config_version=5
 [application]
 
 config/name="AshtaChemma"
+run/main_scene="uid://ch73dk2skmecn"
 config/features=PackedStringArray("4.5", "Mobile")
 config/icon="res://icon.svg"
 

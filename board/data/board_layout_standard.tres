@@ -5,4 +5,7 @@
 [resource]
 script = ExtResource("1_wln0x")
 square_coordinates = Array[Vector2]([Vector2(32, 32), Vector2(96, 32), Vector2(160, 32), Vector2(224, 32), Vector2(288, 32), Vector2(32, 96), Vector2(96, 96), Vector2(160, 96), Vector2(224, 96), Vector2(288, 96), Vector2(32, 160), Vector2(96, 160), Vector2(160, 160), Vector2(224, 160), Vector2(288, 160), Vector2(32, 224), Vector2(96, 224), Vector2(160, 224), Vector2(224, 224), Vector2(288, 224), Vector2(32, 288), Vector2(96, 288), Vector2(160, 288), Vector2(224, 288), Vector2(288, 288)])
+p1_path = Array[int]([22, 23, 24, 19, 14, 9, 4, 3, 2, 1, 0, 5, 10, 15, 20, 21, 16, 11, 6, 7, 8, 13, 18, 17, 12])
+p2_path = Array[int]([2, 1, 0, 5, 10, 15, 20, 21, 22, 23, 24, 19, 14, 9, 4, 3, 8, 13, 18, 17, 16, 11, 6, 7, 12])
+safe_squares = Array[int]([2, 10, 12, 14, 22])
 metadata/_custom_type_script = "uid://dxjlcqngbqwya"
