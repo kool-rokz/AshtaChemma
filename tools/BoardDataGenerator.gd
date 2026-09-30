@@ -100,9 +100,10 @@ func _generate_5x5_paths() -> void:
 	target_resource.p2_path = p2
 	target_resource.home_index = 12
 	
-	# Define safe squares (Cross pattern usually)
+	# Define safe squares: outer-side middles (homebases), centre, and inner-ring corners
 	target_resource.safe_squares = _get_indices_from_coords([
-		[2,0], [0,2], [2,2], [4,2], [2,4]
+		[2,0], [0,2], [2,2], [4,2], [2,4],
+		[1,1], [3,1], [3,3], [1,3]
 	])
 	
 	print("Generated P1 Path (%d steps) and P2 Path (%d steps)." % [p1.size(), p2.size()])

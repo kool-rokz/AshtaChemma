@@ -1,27 +1,67 @@
 class_name Pawn
 extends Area2D
 
-signal pawn_clicked(pawn_instance: Pawn)
 signal movement_finished
+signal hovered(pawn: Pawn)
+signal unhovered(pawn: Pawn)
 
-## 0 for Player 1, 1 for Player 2.
+## Index of the owning player (0..player count - 1).
 @export var team_id: int = 0
+
+## Tint applied to the (white) pawn sprite.
+@export var team_color: Color = Color.WHITE
 
 ## The logical index of the square this pawn currently occupies (0-24).
 var current_tile_index: int = -1
+
+## True while this pawn is a legal choice for the current roll.
+var is_highlighted: bool = false
+
+## White so it reads against every team colour (including green).
+const HIGHLIGHT_COLOR := Color(1.0, 1.0, 1.0)
+const HIGHLIGHT_RADIUS := 30.0
 
 @onready var sprite: Sprite2D = $Sprite2D
 
 func _ready() -> void:
 	# Connect the built-in input event signal to ourselves
 	input_event.connect(_on_input_event)
+	mouse_entered.connect(func(): hovered.emit(self))
+	mouse_exited.connect(func(): unhovered.emit(self))
 
-func set_team(new_team_id: int) -> void:
+	# Dynamically resize the collision shape to match the sprite size
+	# This fixes issues where the default CircleShape2D radius (10px) is too small to click easily.
+	var shape_node = $CollisionShape2D
+	if shape_node and sprite.texture:
+		var radius = max(sprite.texture.get_width(), sprite.texture.get_height()) / 2.0
+		var new_shape = CircleShape2D.new()
+		new_shape.radius = radius
+		shape_node.shape = new_shape
+
+	set_team(team_id, team_color)
+	set_process(false)
+
+func set_highlighted(on: bool) -> void:
+	is_highlighted = on
+	set_process(on) # _process only drives the pulse animation
+	queue_redraw()
+
+func _process(_delta: float) -> void:
+	queue_redraw()
+
+func _draw() -> void:
+	if not is_highlighted:
+		return
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 150.0)
+	var color := HIGHLIGHT_COLOR
+	color.a = lerpf(0.45, 1.0, pulse)
+	draw_arc(Vector2.ZERO, HIGHLIGHT_RADIUS, 0.0, TAU, 48, color, 4.0, true)
+
+func set_team(new_team_id: int, color: Color) -> void:
 	team_id = new_team_id
-	if team_id == 0:
-		sprite.modulate = Color.TOMATO # Reddish
-	else:
-		sprite.modulate = Color.CORNFLOWER_BLUE # Blueish
+	team_color = color
+	if sprite:
+		sprite.modulate = color
 
 
 func place_at(position_vec: Vector2, tile_index: int) -> void:
@@ -46,13 +86,19 @@ func move_along_path(path_coordinates: Array[Vector2]) -> void:
 		tween.parallel().tween_property(sprite, "scale", Vector2(1.2, 1.2), 0.15)
 		tween.parallel().tween_property(sprite, "scale", Vector2(1.0, 1.0), 0.15).set_delay(0.15)
 	
-	# When the whole sequence is done, emit a signal
-	tween.finished.connect(func(): movement_finished.emit())
+	# Block the caller until the whole sequence is done
+	await tween.finished
+	movement_finished.emit()
 
 # Handle clicks
 func _on_input_event(_viewport, event, _shape_idx) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		# Scalable: Find the manager and request selection
-		var manager = get_tree().current_scene.find_child("GameManager")
-		if manager:
+		print("Pawn clicked: ", name)
+		var manager = get_tree().current_scene
+		if not manager is GameManager:
+			manager = get_tree().current_scene.find_child("GameManager*", true, false)
+			
+		if manager and manager.has_method("request_select_pawn"):
 			manager.request_select_pawn(self)
+		else:
+			push_error("Pawn could not find GameManager!")
