@@ -10,8 +10,4 @@ func _init(sequence: Array[int] = []) -> void:
 
 func throw() -> Array[bool]:
 	var value: int = values.pop_front() if not values.is_empty() else 2
-	var open_up := 0 if value == ASHTA_MOVE else value
-	var shells: Array[bool] = []
-	for i in SHELL_COUNT:
-		shells.append(i < open_up)
-	return shells
+	return CowryThrower.shells_for(value)

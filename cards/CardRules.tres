@@ -1,0 +1,6 @@
+[gd_resource type="Resource" script_class="CardRulesConfig" format=3]
+
+[ext_resource type="Script" path="res://cards/CardRulesConfig.gd" id="1_i5yv5"]
+
+[resource]
+script = ExtResource("1_i5yv5")

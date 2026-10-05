@@ -10,6 +10,7 @@ var _content: VBoxContainer
 var _player_count: int = GameConfig.MIN_PLAYERS
 ## Per player: {"name_edit": LineEdit, "color_name": String, "buttons": {color_name: Button}}
 var _rows: Array[Dictionary] = []
+var _cards_toggle: CheckBox
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -83,6 +84,14 @@ func _show_player_setup_step(count: int) -> void:
 	var defaults := GameConfig.default_players(count)
 	for i in count:
 		_content.add_child(_build_player_row(i, defaults[i]["color_name"]))
+
+	_cards_toggle = CheckBox.new()
+	_cards_toggle.name = "PlayWithCards"
+	_cards_toggle.text = "Play with cards (experimental)"
+	# On by default for the first match; afterwards remembers the last choice
+	_cards_toggle.button_pressed = GameConfig.cards_enabled or GameConfig.players.is_empty()
+	_cards_toggle.add_theme_font_size_override("font_size", 18)
+	_content.add_child(_cards_toggle)
 
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 16)
@@ -158,4 +167,5 @@ func _start_game() -> void:
 			"color_name": _rows[i]["color_name"],
 		})
 	GameConfig.players = config
+	GameConfig.cards_enabled = _cards_toggle.button_pressed
 	get_tree().change_scene_to_file(GAME_SCENE_PATH)

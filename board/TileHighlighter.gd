@@ -36,6 +36,10 @@ var _active_color: Color = Color.WHITE
 var _arrow_from: int = -1
 var _arrow_to: int = -1
 var _arrow_unlocked: bool = false
+## Squares the player may pick right now (pulsing outline).
+var _target_tiles: Array[int] = []
+## tile -> Color for squares under a lasting effect (e.g. a temporary safe house).
+var _marked_tiles: Dictionary = {}
 
 func _ready() -> void:
 	set_process(false)
@@ -61,6 +65,15 @@ func set_active_player(homebase: int, arrow_from: int, arrow_to: int, color: Col
 func show_move_preview(tiles: Array[int], end: PreviewEnd) -> void:
 	_preview_tiles = tiles
 	_preview_end = end
+	queue_redraw()
+
+func set_target_tiles(tiles: Array[int]) -> void:
+	_target_tiles = tiles
+	set_process(true)
+	queue_redraw()
+
+func set_marked_tiles(tiles: Dictionary) -> void:
+	_marked_tiles = tiles
 	queue_redraw()
 
 func clear_move_preview() -> void:
@@ -94,6 +107,16 @@ func _draw() -> void:
 		draw_line(c + Vector2(-half, -half) * 0.7, c + Vector2(half, half) * 0.7, SAFE_MARK_COLOR, 3.0, true)
 		draw_line(c + Vector2(-half, half) * 0.7, c + Vector2(half, -half) * 0.7, SAFE_MARK_COLOR, 3.0, true)
 
+	# Squares under a lasting effect: tinted, with a cross like a safe house
+	for index in _marked_tiles:
+		var c: Vector2 = data.square_coordinates[index]
+		var color: Color = _marked_tiles[index]
+		var fill := color
+		fill.a = 0.3
+		draw_rect(Rect2(c - Vector2(half, half), Vector2(half, half) * 2.0), fill)
+		draw_line(c + Vector2(-half, -half) * 0.7, c + Vector2(half, half) * 0.7, color, 3.0, true)
+		draw_line(c + Vector2(-half, half) * 0.7, c + Vector2(half, -half) * 0.7, color, 3.0, true)
+
 	# Inner-ring entry arrow for the active player
 	if _arrow_from >= 0 and _arrow_to >= 0:
 		_draw_entry_arrow(data.square_coordinates[_arrow_from], data.square_coordinates[_arrow_to], tile)
@@ -111,6 +134,14 @@ func _draw() -> void:
 			draw_rect(rect, border, false, 3.0)
 		draw_string(font, c + Vector2(-half + 4, -half + 16), str(i + 1),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.1, 0.1, 0.1, 0.9))
+
+	# Squares the player can pick (card targeting)
+	if not _target_tiles.is_empty():
+		var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 150.0)
+		for index in _target_tiles:
+			var c: Vector2 = data.square_coordinates[index]
+			draw_rect(Rect2(c - Vector2(half, half), Vector2(half, half) * 2.0).grow(-2.0),
+				Color(1, 1, 1, lerpf(0.45, 1.0, pulse)), false, 4.0)
 
 	# Tile under the mouse
 	if hovered_tile >= 0:

@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_so8hy"]
+[ext_resource type="Script" path="res://cards/effects/ForceThrowEffect.gd" id="2_a3qq4"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="3_sqmux"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="4_mvhry"]
+
+[sub_resource type="Resource" id="Resource_3ykbb"]
+script = ExtResource("2_a3qq4")
+
+[resource]
+script = ExtResource("3_sqmux")
+id = &"loaded_shells"
+title = "Loaded Shells"
+description = "Your next throw is a 4 (chamma), so you throw again."
+color = Color(0.75, 0.55, 0.2, 1)
+effects = Array[ExtResource("1_so8hy")]([SubResource("Resource_3ykbb")])

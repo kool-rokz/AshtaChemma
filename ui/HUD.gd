@@ -22,9 +22,16 @@ var _log: RichTextLabel
 var _player_rows: Array[Dictionary] = []
 var _winner_overlay: Control
 var _winner_label: Label
+## Pulsing screen-edge glow in the active player's colour.
+var _turn_glow: ColorRect
+var _glow_tween: Tween
+
+const TURN_GLOW_SHADER := preload("res://ui/TurnGlow.gdshader")
+const GLOW_FADE_TIME := 0.6
 
 func _init() -> void:
 	# Built here (not in _ready) so GameManager can grab roll_button in its own _ready.
+	_build_turn_glow() # first, so it draws behind the panels
 	_build_right_panel()
 	_build_winner_overlay()
 
@@ -41,6 +48,9 @@ func bind(gm: GameManager) -> void:
 	gm.turn_forfeited.connect(_on_turn_forfeited)
 	gm.pawn_moved.connect(_on_pawn_moved)
 	gm.pawn_captured.connect(_on_pawn_captured)
+	gm.pawn_sent_home.connect(_on_pawn_sent_home)
+	gm.pawns_swapped.connect(_on_pawns_swapped)
+	gm.turn_skipped.connect(_on_turn_skipped)
 	gm.inner_ring_unlocked.connect(_on_inner_ring_unlocked)
 	gm.pawn_reached_home.connect(_on_pawn_reached_home)
 	gm.bonus_turn.connect(_on_bonus_turn)
@@ -151,12 +161,35 @@ func _build_players_panel() -> void:
 		text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var name_label := _label(_gm.get_player_name(i), 17)
 		var status_label := _label("", 13, Color(0.7, 0.7, 0.75))
+		var note_label := _label("", 13, Color(0.85, 0.78, 0.55))
+		note_label.visible = false
 		text.add_child(name_label)
 		text.add_child(status_label)
+		text.add_child(note_label)
 		row.add_child(text)
 		box.add_child(row)
-		_player_rows.append({"name": name_label, "status": status_label})
+		_player_rows.append({"name": name_label, "status": status_label, "note": note_label})
 	_refresh_players()
+
+func _build_turn_glow() -> void:
+	_turn_glow = ColorRect.new()
+	_turn_glow.name = "TurnGlow"
+	_turn_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_turn_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var material := ShaderMaterial.new()
+	material.shader = TURN_GLOW_SHADER
+	material.set_shader_parameter("glow_color", Color(1, 1, 1, 0))
+	_turn_glow.material = material
+	add_child(_turn_glow)
+
+## Cross-fades the edge glow to `color`.
+func _set_glow_color(color: Color) -> void:
+	var material := _turn_glow.material as ShaderMaterial
+	if _glow_tween:
+		_glow_tween.kill()
+	_glow_tween = create_tween()
+	_glow_tween.tween_method(func(c: Color): material.set_shader_parameter("glow_color", c),
+		material.get_shader_parameter("glow_color"), color, GLOW_FADE_TIME)
 
 func _build_winner_overlay() -> void:
 	_winner_overlay = ColorRect.new()
@@ -179,6 +212,29 @@ func _build_winner_overlay() -> void:
 	again.add_theme_font_size_override("font_size", 20)
 	again.pressed.connect(func(): get_tree().change_scene_to_file(START_SCREEN_PATH))
 	box.add_child(again)
+
+# --- PUBLIC (for add-on systems such as the card UI) ---
+## Adds a line (BBCode) to the "What's happening" log.
+func log_message(bbcode: String) -> void:
+	_log_line(bbcode)
+
+## Player name in their colour, bold (BBCode).
+func who(player_id: int) -> String:
+	return _who(player_id)
+
+## Replaces the hint under the turn label.
+func set_hint(text: String) -> void:
+	_hint_label.text = text
+
+## Extra line under a player's status in the players panel ("" hides it).
+func set_player_note(player_id: int, text: String) -> void:
+	if player_id < 0 or player_id >= _player_rows.size():
+		return
+	_player_rows[player_id]["note"].text = text
+	_player_rows[player_id]["note"].visible = text != ""
+
+func describe_tile(tile: int) -> String:
+	return _describe_tile(tile)
 
 # --- TEXT HELPERS ---
 func _who(player_id: int) -> String:
@@ -219,6 +275,11 @@ func _on_turn_changed(player_id: int) -> void:
 	_turn_label.add_theme_color_override("font_color", _gm.get_player_color(player_id))
 	_hint_label.text = "Throw the shells."
 	roll_button.text = "Throw shells"
+	# The previous player's throw would read as this player's, so start blank
+	_shells_view.shells = []
+	_roll_value_label.text = "–"
+	_preview_label.text = ""
+	_set_glow_color(_gm.get_player_color(player_id))
 	_refresh_players()
 
 func _on_roll_result(value: int) -> void:
@@ -299,6 +360,16 @@ func _on_pawn_moved(pawn: Pawn, from_tile: int, to_tile: int, steps: int) -> voi
 func _on_pawn_captured(attacker: Pawn, victim: Pawn) -> void:
 	_log_line("[color=#ff6b6b]%s captured %s's pawn — it goes back to its homebase! Extra throw once this turn's throws are used.[/color]" % [_who(attacker.team_id), _who(victim.team_id)])
 	_refresh_players()
+
+func _on_pawn_sent_home(pawn: Pawn, from_tile: int) -> void:
+	_log_line("%s's pawn was sent from %s back to its homebase." % [_who(pawn.team_id), _describe_tile(from_tile)])
+	_refresh_players()
+
+func _on_pawns_swapped(a: Pawn, b: Pawn) -> void:
+	_log_line("%s's pawn and %s's pawn swapped places." % [_who(a.team_id), _who(b.team_id)])
+
+func _on_turn_skipped(player_id: int) -> void:
+	_log_line("[color=#f0a54a]%s's turn is skipped.[/color]" % _who(player_id))
 
 func _on_inner_ring_unlocked(player_id: int) -> void:
 	_log_line("%s unlocked the inner ring — the entry arrow is now open." % _who(player_id))

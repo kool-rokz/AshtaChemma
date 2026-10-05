@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_tibgd"]
+[ext_resource type="Script" path="res://cards/effects/SwapPawnsEffect.gd" id="2_qatcf"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="3_06k20"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="4_t76ax"]
+
+[sub_resource type="Resource" id="Resource_57th5"]
+script = ExtResource("2_qatcf")
+
+[sub_resource type="Resource" id="Resource_8paia"]
+script = ExtResource("4_t76ax")
+prompt = "Pick your pawn to swap"
+exclude_homebase = true
+outer_ring_only = true
+
+[sub_resource type="Resource" id="Resource_damts"]
+script = ExtResource("4_t76ax")
+kind = 1
+prompt = "Pick an opponent's pawn to swap with"
+exclude_homebase = true
+exclude_safe = true
+outer_ring_only = true
+
+[resource]
+script = ExtResource("3_06k20")
+id = &"switcheroo"
+title = "Switcheroo"
+description = "Swap with an opponent's pawn on the outer ring."
+color = Color(0.25, 0.55, 0.75, 1)
+targets = Array[ExtResource("4_t76ax")]([SubResource("Resource_8paia"), SubResource("Resource_damts")])
+effects = Array[ExtResource("1_tibgd")]([SubResource("Resource_57th5")])

@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_2jrlw"]
+[ext_resource type="Script" path="res://cards/effects/SendHomeEffect.gd" id="2_c10tm"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="3_43mqg"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="4_4boux"]
+
+[sub_resource type="Resource" id="Resource_kipmm"]
+script = ExtResource("2_c10tm")
+
+[sub_resource type="Resource" id="Resource_rq07q"]
+script = ExtResource("4_4boux")
+kind = 1
+prompt = "Pick an opponent's pawn on a normal square"
+exclude_safe = true
+
+[resource]
+script = ExtResource("3_43mqg")
+id = &"banish"
+title = "Banish"
+description = "Send an opponent's pawn on a normal square home."
+color = Color(0.75, 0.25, 0.25, 1)
+targets = Array[ExtResource("4_4boux")]([SubResource("Resource_rq07q")])
+effects = Array[ExtResource("1_2jrlw")]([SubResource("Resource_kipmm")])

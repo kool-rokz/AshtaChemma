@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_eo7b7"]
+[ext_resource type="Script" path="res://cards/CardModifier.gd" id="2_pytgb"]
+[ext_resource type="Script" path="res://cards/effects/AddModifierEffect.gd" id="3_jo0hx"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="4_68cgh"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="5_fof4u"]
+
+[sub_resource type="Resource" id="Resource_2f6y4"]
+script = ExtResource("2_pytgb")
+label = "stalled"
+hook = &"skip_turn"
+scope = 3
+amount = 1.0
+
+[sub_resource type="Resource" id="Resource_bj3fq"]
+script = ExtResource("3_jo0hx")
+modifier = SubResource("Resource_2f6y4")
+target_index = 0
+
+[sub_resource type="Resource" id="Resource_njssw"]
+script = ExtResource("5_fof4u")
+kind = 4
+
+[resource]
+script = ExtResource("4_68cgh")
+id = &"stall"
+title = "Stall"
+description = "The next player skips their turn."
+color = Color(0.4, 0.45, 0.55, 1)
+targets = Array[ExtResource("5_fof4u")]([SubResource("Resource_njssw")])
+effects = Array[ExtResource("1_eo7b7")]([SubResource("Resource_bj3fq")])

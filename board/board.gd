@@ -11,8 +11,12 @@ signal board_ready
 
 ## Mouse moved onto a different tile (-1 = off the board).
 signal tile_hovered(tile_index: int)
+## Left click on a tile (used when something asks the player to pick a square).
+signal tile_clicked(tile_index: int)
 
 var highlighter: TileHighlighter
+## Rule hooks shared with GameManager (lets "is_safe" be changed at runtime).
+var rules: RuleHooks = RuleHooks.new()
 var _hovered_tile: int = -1
 
 func _ready() -> void:
@@ -28,12 +32,18 @@ func _ready() -> void:
 	board_ready.emit()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not event is InputEventMouse:
+		return
+	# The event's own position (not the OS cursor), so injected/replayed input works too
+	var tile := get_tile_at(get_canvas_transform().affine_inverse() * event.position)
 	if event is InputEventMouseMotion:
-		var tile := get_tile_at(get_global_mouse_position())
 		if tile != _hovered_tile:
 			_hovered_tile = tile
 			highlighter.hovered_tile = tile
 			tile_hovered.emit(tile)
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if tile >= 0:
+			tile_clicked.emit(tile)
 
 ## Returns the global position for a piece to move to.
 func get_square_position(index: int) -> Vector2:
@@ -62,4 +72,4 @@ func get_tile_at(global_pos: Vector2) -> int:
 	return int(local.x / tile_size) + int(local.y / tile_size) * n
 
 func is_safe(tile_index: int) -> bool:
-	return tile_index in board_data.safe_squares
+	return rules.modify(&"is_safe", tile_index in board_data.safe_squares, {"tile": tile_index})

@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_mq31t"]
+[ext_resource type="Script" path="res://cards/CardModifier.gd" id="2_ij6k6"]
+[ext_resource type="Script" path="res://cards/effects/AddModifierEffect.gd" id="3_sfye4"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="4_i4d0v"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="5_sm4cy"]
+
+[sub_resource type="Resource" id="Resource_vdvfq"]
+script = ExtResource("2_ij6k6")
+label = "tailwind"
+hook = &"move_steps"
+op = 1
+amount = 1.0
+
+[sub_resource type="Resource" id="Resource_qow5p"]
+script = ExtResource("3_sfye4")
+modifier = SubResource("Resource_vdvfq")
+
+[resource]
+script = ExtResource("4_i4d0v")
+id = &"tailwind"
+title = "Tailwind"
+description = "This turn every one of your moves goes 1 square further."
+color = Color(0.35, 0.65, 0.55, 1)
+effects = Array[ExtResource("1_mq31t")]([SubResource("Resource_qow5p")])

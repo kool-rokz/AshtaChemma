@@ -16,19 +16,28 @@ signal throws_exhausted(player_id: int, values: Array[int])
 signal turn_forfeited(player_id: int, values: Array[int])
 signal pawn_moved(pawn: Pawn, from_tile: int, to_tile: int, steps: int)
 signal pawn_captured(attacker: Pawn, victim: Pawn)
+## A pawn was returned to its homebase by something other than a capture (e.g. a command).
+signal pawn_sent_home(pawn: Pawn, from_tile: int)
+signal pawns_swapped(a: Pawn, b: Pawn)
+## The "skip_turn" rule hook made this player miss their turn.
+signal turn_skipped(player_id: int)
 signal inner_ring_unlocked(player_id: int)
 signal pawn_reached_home(pawn: Pawn, pawns_home: int)
 signal bonus_turn(player_id: int, reason: String)
 ## Emitted when the hovered move preview changes; empty Dictionary = cleared.
 ## Keys: pawn, tiles (Array[int]), end (TileHighlighter.PreviewEnd), victim (Pawn or null).
 signal move_preview_changed(info: Dictionary)
+## Every GameCommand applied through apply_command(), after it took effect.
+signal command_applied(command: GameCommand)
 signal game_over(winner_id: int)
 
 enum GameState {
 	TURN_START,
 	WAITING_FOR_ROLL,
 	SELECTING_PIECE,
-	MOVING
+	MOVING,
+	## An outside system (e.g. cards) is resolving actions before the throw; input locked.
+	PLAYING_CARD,
 }
 
 var current_state: GameState = GameState.TURN_START
@@ -56,6 +65,12 @@ const TURN_PASS_DELAY := 1.2
 
 ## Swap for a physics-based thrower later; scoring stays in CowryThrower.score().
 var cowry_thrower: CowryThrower
+
+## Rule queries (see RuleHooks). The default changes nothing; an outside system
+## (the card system) installs its own via set_rules().
+var rules: RuleHooks = RuleHooks.new()
+## Awaited in order before the first turn (e.g. the card draft).
+var pre_game_tasks: Array[Callable] = []
 
 ## Set from hud.roll_button; kept as a field so tests can press it.
 var roll_button: Button
@@ -87,6 +102,8 @@ var selected_throw: int = -1
 var _bonus_chain: int = 0
 ## A capture earns one more throw once the current pool is spent.
 var _extra_throw_pending: bool = false
+## Values the next throws will land on, instead of throwing the shells.
+var _forced_throws: Array[int] = []
 var _game_finished: bool = false
 
 var _hovered_pawn: Pawn = null
@@ -103,6 +120,7 @@ func set_state(new_state: GameState) -> void:
 			selected_throw = -1
 			_bonus_chain = 0
 			_extra_throw_pending = false
+			_forced_throws.clear()
 			_clear_highlights()
 			_update_board_markers()
 			turn_changed.emit(current_player_index)
@@ -112,10 +130,7 @@ func set_state(new_state: GameState) -> void:
 		GameState.WAITING_FOR_ROLL:
 			roll_button.disabled = false
 
-		GameState.SELECTING_PIECE:
-			roll_button.disabled = true
-
-		GameState.MOVING:
+		GameState.SELECTING_PIECE, GameState.MOVING, GameState.PLAYING_CARD:
 			roll_button.disabled = true
 
 
@@ -136,10 +151,13 @@ func _ready() -> void:
 	roll_button.pressed.connect(request_roll_dice)
 	roll_button.disabled = true
 	board.tile_hovered.connect(_on_tile_hovered)
+	board.rules = rules
 	hud.bind(self)
 
-	# 3. Start game safely
+	# 3. Start game safely (after any setup other systems registered, like a draft)
 	await get_tree().process_frame
+	for task in pre_game_tasks:
+		await task.call()
 	start_game()
 
 ## Every player's pawns start stacked on their homebase (their side's entry square).
@@ -179,6 +197,11 @@ func start_game() -> void:
 	_game_finished = false
 	set_state(GameState.TURN_START)
 
+## Replace the rule hooks (for both this manager and the board's safe-square check).
+func set_rules(new_rules: RuleHooks) -> void:
+	rules = new_rules
+	board.rules = new_rules
+
 func get_player_name(player_id: int) -> String:
 	return players[player_id]["name"]
 
@@ -211,6 +234,32 @@ func get_pawns_at_tile(tile_index: int) -> Array[Pawn]:
 				result.append(child)
 	return result
 
+func get_all_pawns() -> Array[Pawn]:
+	var result: Array[Pawn] = []
+	for container in pawn_containers:
+		for child in container.get_children():
+			if child is Pawn:
+				result.append(child)
+	return result
+
+## How far along its own path a pawn is (0 = homebase, 24 = home).
+func get_path_step(pawn: Pawn) -> int:
+	return _get_path(pawn).find(pawn.current_tile_index)
+
+func is_outer_ring_tile(tile_index: int) -> bool:
+	var step := board.board_data.get_seat_path(0).find(tile_index)
+	return step >= 0 and step < OUTER_RING_STEPS
+
+func is_unlocked(player_id: int) -> bool:
+	return player_has_killed[player_id]
+
+func is_game_finished() -> bool:
+	return _game_finished
+
+## Read-only legality check, also for moves that don't use a throw (commands).
+func can_move_pawn(pawn: Pawn, steps: int, obey_rules: bool = true) -> bool:
+	return _validate_move(pawn, steps, obey_rules)
+
 # --- INPUT HANDLERS ---
 func request_roll_dice() -> void:
 	if current_state != GameState.WAITING_FOR_ROLL:
@@ -241,12 +290,65 @@ func request_select_pawn(pawn: Pawn) -> void:
 
 	_execute_move(pawn)
 
+# --- COMMANDS (actions from outside the turn flow, e.g. cards) ---
+## Lock input before the throw so another system can apply commands.
+## Only allowed while the current player is waiting to throw.
+func begin_card_play() -> bool:
+	if current_state != GameState.WAITING_FOR_ROLL or _game_finished:
+		return false
+	_clear_preview()
+	set_state(GameState.PLAYING_CARD)
+	return true
+
+## Hand control back to the current player (they still have to throw).
+func end_card_play() -> void:
+	if _game_finished or current_state != GameState.PLAYING_CARD:
+		return
+	_update_board_markers()
+	_emit_pool()
+	set_state(GameState.WAITING_FOR_ROLL)
+
+## The single entry point for changing game state from outside. Every command
+## runs the same code the normal turn flow uses (paths, captures, unlocks, win).
+func apply_command(command: GameCommand) -> void:
+	if _game_finished:
+		return
+	match command.kind:
+		GameCommand.Kind.MOVE_PAWN:
+			if not _validate_move(command.pawn, command.value, command.obey_rules):
+				push_warning("Command ignored: %s can't move %d." % [command.pawn.name, command.value])
+				return
+			await _move_pawn(command.pawn, command.value, command.obey_rules)
+			_finish_if_won(command.pawn.team_id)
+		GameCommand.Kind.SEND_HOME:
+			_send_pawn_home(command.pawn)
+		GameCommand.Kind.SWAP_PAWNS:
+			_swap_pawns(command.pawn, command.other_pawn)
+		GameCommand.Kind.FORCE_THROW:
+			_forced_throws.append(command.value)
+		GameCommand.Kind.ADD_THROW:
+			throw_pool.append(command.value)
+			_emit_pool()
+		GameCommand.Kind.GRANT_EXTRA_THROW:
+			_extra_throw_pending = true
+		GameCommand.Kind.UNLOCK_INNER:
+			_unlock_inner_ring(command.player)
+	command_applied.emit(command)
+
 # --- ROLL LOGIC ---
 ## Throws accumulate: 4 or 8 adds to the pool and throws again; anything else
 ## closes the pool and the player spends it. Three 4/8s in a row forfeit everything.
 func _execute_roll() -> void:
-	var shells := cowry_thrower.throw()
-	var value := CowryThrower.score(shells)
+	var shells: Array[bool]
+	if not _forced_throws.is_empty():
+		shells = CowryThrower.shells_for(_forced_throws.pop_front())
+	else:
+		var odds: float = rules.modify(&"open_up_probability", open_up_probability, {"player": current_player_index})
+		cowry_thrower.open_up_probability = clampf(odds, 0.0, 1.0)
+		shells = cowry_thrower.throw()
+	var value: int = rules.modify(&"throw_value", CowryThrower.score(shells), {"player": current_player_index})
+	if value != CowryThrower.score(shells):
+		shells = CowryThrower.shells_for(value)
 	current_roll = value
 	throw_pool.append(value)
 	shells_thrown.emit(shells)
@@ -336,9 +438,25 @@ func _execute_move(pawn: Pawn) -> void:
 	current_roll = steps
 	_emit_pool()
 
-	var move_path = _calculate_path_coordinates(pawn, steps)
-	var final_index = _calculate_final_index(pawn, steps)
-	var from_index = pawn.current_tile_index
+	await _move_pawn(pawn, steps)
+
+	# Traditional rule: the last pawn home wins at once; leftover throws don't matter.
+	if _finish_if_won(pawn.team_id):
+		return
+
+	_continue_spending()
+
+## Shared by thrown moves and commands: animate along the path, then resolve the landing.
+func _move_pawn(pawn: Pawn, steps: int, obey_rules: bool = true) -> void:
+	var path := _get_path(pawn)
+	var sequence := _get_step_sequence(pawn, steps, obey_rules)
+	if sequence.is_empty():
+		return
+	var move_path: Array[Vector2] = []
+	for idx in sequence:
+		move_path.append(board.get_square_position(path[idx]))
+	var final_index: int = path[sequence.back()]
+	var from_index := pawn.current_tile_index
 
 	pawn.current_tile_index = final_index
 
@@ -347,36 +465,65 @@ func _execute_move(pawn: Pawn) -> void:
 	_layout_tile(from_index)
 	await pawn.move_along_path(move_path)
 
-	pawn_moved.emit(pawn, from_index, final_index, steps)
+	pawn_moved.emit(pawn, from_index, final_index, sequence.size())
+	_resolve_landing(pawn, final_index)
 
-	# Combat Check: the captured pawn goes back to its homebase
+## Capture (the victim goes back to its homebase, unlocking the inner ring and
+## earning an extra throw), reaching home, and the stack layout.
+func _resolve_landing(pawn: Pawn, final_index: int) -> void:
 	if not board.is_safe(final_index):
 		var occupant = _get_pawn_at_tile_excluding(final_index, pawn)
-		if occupant != null and occupant.team_id != pawn.team_id:
+		if occupant != null and occupant.team_id != pawn.team_id and _can_capture(pawn, occupant, final_index):
 			var victim_home := get_homebase_tile(occupant.team_id)
 			occupant.current_tile_index = victim_home
 			_layout_tile(victim_home)
 			pawn_captured.emit(pawn, occupant)
 			_extra_throw_pending = true
-			if not player_has_killed[pawn.team_id]:
-				player_has_killed[pawn.team_id] = true
-				inner_ring_unlocked.emit(pawn.team_id)
-				_update_board_markers()
+			_unlock_inner_ring(pawn.team_id)
 
 	if final_index == board.board_data.home_index:
 		pawn_reached_home.emit(pawn, count_pawns_home(pawn.team_id))
 
 	_layout_tile(final_index)
 
-	# Traditional rule: the last pawn home wins at once; leftover throws don't matter.
-	if _check_win_condition(current_player_index):
-		_game_finished = true
-		_clear_highlights()
-		print("GAME OVER! %s wins!" % get_player_name(current_player_index))
-		game_over.emit(current_player_index)
-		return
+func _can_capture(attacker: Pawn, victim: Pawn, tile_index: int) -> bool:
+	return rules.modify(&"can_capture", true, {
+		"player": attacker.team_id, "pawn": victim, "victim_player": victim.team_id, "tile": tile_index})
 
-	_continue_spending()
+func _unlock_inner_ring(player_id: int) -> void:
+	if player_has_killed[player_id]:
+		return
+	player_has_killed[player_id] = true
+	inner_ring_unlocked.emit(player_id)
+	_update_board_markers()
+
+func _send_pawn_home(pawn: Pawn) -> void:
+	var from_index := pawn.current_tile_index
+	var homebase := get_homebase_tile(pawn.team_id)
+	if from_index == homebase:
+		return
+	pawn.current_tile_index = homebase
+	_layout_tile(from_index)
+	_layout_tile(homebase)
+	pawn_sent_home.emit(pawn, from_index)
+
+func _swap_pawns(a: Pawn, b: Pawn) -> void:
+	var tile_a := a.current_tile_index
+	a.current_tile_index = b.current_tile_index
+	b.current_tile_index = tile_a
+	_layout_tile(a.current_tile_index)
+	_layout_tile(b.current_tile_index)
+	pawns_swapped.emit(a, b)
+
+## Ends the game if `player_id` has every pawn home. Returns true if it did.
+func _finish_if_won(player_id: int) -> bool:
+	if not _check_win_condition(player_id):
+		return false
+	_game_finished = true
+	_clear_highlights()
+	print("GAME OVER! %s wins!" % get_player_name(player_id))
+	game_over.emit(player_id)
+	return true
 
 ## Arranges every pawn on `tile_index` so stacked pawns (homebases, safe squares, home)
 ## stay visible and clickable: one pawn sits centred at full size, several
@@ -403,8 +550,18 @@ func _pass_turn_after_pause() -> void:
 	await get_tree().create_timer(TURN_PASS_DELAY).timeout
 	if _game_finished:
 		return
-	current_player_index = (current_player_index + 1) % players.size()
+	current_player_index = _next_player_after(current_player_index)
 	set_state(GameState.TURN_START)
+
+## The next player in seat order, skipping anyone the "skip_turn" rule says sits out.
+func _next_player_after(player_id: int) -> int:
+	var next := player_id
+	for i in players.size():
+		next = (next + 1) % players.size()
+		if not rules.modify(&"skip_turn", false, {"player": next}):
+			return next
+		turn_skipped.emit(next)
+	return (player_id + 1) % players.size()
 
 func _check_win_condition(player_id: int) -> bool:
 	return count_pawns_home(player_id) == pawn_containers[player_id].get_child_count()
@@ -443,7 +600,7 @@ func get_move_preview(pawn: Pawn) -> Dictionary:
 	var victim: Pawn = null
 	if not board.is_safe(final_tile):
 		var occupant = _get_pawn_at_tile_excluding(final_tile, pawn)
-		if occupant != null and occupant.team_id != pawn.team_id:
+		if occupant != null and occupant.team_id != pawn.team_id and _can_capture(pawn, occupant, final_tile):
 			victim = occupant
 
 	var end := TileHighlighter.PreviewEnd.NORMAL
@@ -509,12 +666,16 @@ func _get_path(pawn: Pawn) -> Array[int]:
 ## overshoots home: an exact throw is required).
 ## Unlock Rule: until its player has killed, a pawn keeps circling the outer ring
 ## (step OUTER_RING_STEPS - 1 wraps back to step 0, its homebase) instead of turning inward.
-func _get_step_sequence(pawn: Pawn, steps: int) -> Array[int]:
+## obey_rules = false lets a command move a locked pawn inward anyway.
+func _get_step_sequence(pawn: Pawn, steps: int, obey_rules: bool = true) -> Array[int]:
+	steps = rules.modify(&"move_steps", steps, {"player": pawn.team_id, "pawn": pawn})
+	if steps <= 0:
+		return []
 	var path := _get_path(pawn)
 	var current_idx := path.find(pawn.current_tile_index)
 	if current_idx == path.size() - 1:
 		return [] # Already home
-	var locked: bool = not player_has_killed[pawn.team_id]
+	var locked: bool = obey_rules and not player_has_killed[pawn.team_id]
 	var sequence: Array[int] = []
 
 	for i in range(1, steps + 1):
@@ -526,8 +687,8 @@ func _get_step_sequence(pawn: Pawn, steps: int) -> Array[int]:
 		sequence.append(next_idx)
 	return sequence
 
-func _validate_move(pawn: Pawn, steps: int = current_roll) -> bool:
-	var sequence := _get_step_sequence(pawn, steps)
+func _validate_move(pawn: Pawn, steps: int = current_roll, obey_rules: bool = true) -> bool:
+	var sequence := _get_step_sequence(pawn, steps, obey_rules)
 	if sequence.is_empty():
 		return false
 
@@ -536,23 +697,13 @@ func _validate_move(pawn: Pawn, steps: int = current_roll) -> bool:
 	# Occupancy / Stacking Rule
 	if not board.is_safe(target_tile):
 		var occupant = _get_pawn_at_tile_excluding(target_tile, pawn)
-		if occupant != null and occupant.team_id == pawn.team_id:
-			return false # Cannot stack own pieces on non-safe tiles
+		if occupant != null:
+			if occupant.team_id == pawn.team_id and obey_rules:
+				return false # Cannot stack own pieces on non-safe tiles
+			if occupant.team_id != pawn.team_id and not _can_capture(pawn, occupant, target_tile):
+				return false # Protected pawn: can't be captured, so the square is blocked
 
 	return true
-
-func _calculate_path_coordinates(pawn: Pawn, steps: int) -> Array[Vector2]:
-	var coords: Array[Vector2] = []
-	var path := _get_path(pawn)
-	for idx in _get_step_sequence(pawn, steps):
-		coords.append(board.get_square_position(path[idx]))
-	return coords
-
-func _calculate_final_index(pawn: Pawn, steps: int) -> int:
-	var sequence := _get_step_sequence(pawn, steps)
-	if sequence.is_empty():
-		return pawn.current_tile_index
-	return _get_path(pawn)[sequence.back()]
 
 func _get_pawn_at_tile_excluding(tile_index: int, exclude_pawn: Pawn = null) -> Pawn:
 	for container in pawn_containers:

@@ -3,6 +3,8 @@
 [ext_resource type="PackedScene" uid="uid://cd3kwiikt180v" path="res://board/Board.tscn" id="3_8qpgq"]
 [ext_resource type="PackedScene" uid="uid://cjboufy2oqxwa" path="res://game_manager/GameManager.tscn" id="3_bqqt8"]
 [ext_resource type="PackedScene" path="res://ui/HUD.tscn" id="4_hud"]
+[ext_resource type="Script" path="res://cards/CardManager.gd" id="5_cards"]
+[ext_resource type="Resource" path="res://cards/CardRules.tres" id="6_rules"]
 
 [node name="Node2D" type="Node2D" unique_id=1938848503]
 
@@ -17,3 +19,8 @@ position = Vector2(470, 207)
 board = NodePath("../Board")
 hud = NodePath("../HUD")
 pawns_root = NodePath("../Players")
+
+[node name="CardManager" type="Node" parent="." node_paths=PackedStringArray("game")]
+script = ExtResource("5_cards")
+game = NodePath("../GameManager")
+rules_config = ExtResource("6_rules")

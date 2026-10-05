@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_mu0t6"]
+[ext_resource type="Script" path="res://cards/effects/MovePawnEffect.gd" id="2_dkyeq"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="3_57cwj"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="4_0yjd6"]
+
+[sub_resource type="Resource" id="Resource_exwcy"]
+script = ExtResource("2_dkyeq")
+
+[sub_resource type="Resource" id="Resource_5bgxv"]
+script = ExtResource("4_0yjd6")
+prompt = "Pick a pawn to move 2"
+
+[resource]
+script = ExtResource("3_57cwj")
+id = &"sprint"
+title = "Sprint"
+description = "Move one of your pawns 2 squares. No throw needed."
+color = Color(0.25, 0.6, 0.35, 1)
+targets = Array[ExtResource("4_0yjd6")]([SubResource("Resource_5bgxv")])
+effects = Array[ExtResource("1_mu0t6")]([SubResource("Resource_exwcy")])

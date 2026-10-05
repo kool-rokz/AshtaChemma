@@ -27,6 +27,9 @@ const SEATS_BY_PLAYER_COUNT: Dictionary = {
 ## One entry per player: {"name": String, "color_name": String}. Empty = use defaults.
 static var players: Array[Dictionary] = []
 
+## Experimental card layer (cards/CardManager). false = the plain game, exactly as before.
+static var cards_enabled: bool = false
+
 static func get_players() -> Array[Dictionary]:
 	if players.size() >= MIN_PLAYERS:
 		return players

@@ -8,6 +8,9 @@ var game_instance: GameManager
 var match_running: bool = false
 var turn_count: int = 0
 var max_turns: int = 2000 # Safety limit to prevent infinite loops (like a stalemate)
+## --cards: draft random hands and play a random legal card (random targets) half the time.
+var use_cards: bool = false
+var card_manager: CardManager
 
 func _ready() -> void:
 	print("========================================")
@@ -22,8 +25,11 @@ func _run_simulation() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--players="):
 			player_count = clampi(int(arg.get_slice("=", 1)), GameConfig.MIN_PLAYERS, GameConfig.MAX_PLAYERS)
+		elif arg == "--cards":
+			use_cards = true
 	GameConfig.players = GameConfig.default_players(player_count)
-	print("Players: %d" % player_count)
+	GameConfig.cards_enabled = use_cards
+	print("Players: %d%s" % [player_count, " (with cards)" if use_cards else ""])
 	
 	# 1. Load and Instantiate the Main Game Scene
 	var packed_scene = load(GAME_SCENE_PATH)
@@ -33,6 +39,9 @@ func _run_simulation() -> void:
 		return
 
 	var main_scene: Node = packed_scene.instantiate()
+	if use_cards:
+		card_manager = main_scene.get_node("CardManager")
+		card_manager.auto_draft = true
 	add_child(main_scene)
 	game_instance = main_scene.get_node("GameManager") as GameManager
 	if not game_instance:
@@ -59,7 +68,11 @@ func _run_simulation() -> void:
 		# Act based on the Game's current state
 		match game_instance.current_state:
 			GameManager.GameState.WAITING_FOR_ROLL:
-				_simulate_roll()
+				if not _simulate_card():
+					_simulate_roll()
+			GameManager.GameState.PLAYING_CARD:
+				if use_cards and card_manager.is_targeting():
+					card_manager.choose_target(card_manager.get_target_candidates().pick_random())
 			GameManager.GameState.SELECTING_PIECE:
 				_simulate_piece_selection()
 				
@@ -83,6 +96,15 @@ func _simulate_roll() -> void:
 		# Directly emitting 'pressed' simulates a button click perfectly
 		game_instance.roll_button.pressed.emit()
 		
+## Half the time, play a random playable card. Returns true if one was started.
+func _simulate_card() -> bool:
+	if not use_cards or not card_manager.can_play_now() or randf() < 0.5:
+		return false
+	var playable := card_manager.get_playable_cards(game_instance.current_player_index)
+	if playable.is_empty():
+		return false
+	return card_manager.request_play(playable.pick_random())
+
 func _simulate_piece_selection() -> void:
 	# Find the currently highlighted pawns for the active player
 	var movable_pawns = []
@@ -114,6 +136,8 @@ func _on_game_over(winner_id: int) -> void:
 	print("========================================")
 	print("Winner: %s (player index %d)" % [game_instance.get_player_name(winner_id), winner_id])
 	print("Total Actions Simulated: %d" % turn_count)
+	if use_cards:
+		print("Cards played: %d" % card_manager.cards_played)
 	
 	# Validation Step: Double check the state of the board matches a win state.
 	var is_valid_win = true

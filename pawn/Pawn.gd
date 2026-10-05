@@ -4,6 +4,7 @@ extends Area2D
 signal movement_finished
 signal hovered(pawn: Pawn)
 signal unhovered(pawn: Pawn)
+signal clicked(pawn: Pawn)
 
 ## Index of the owning player (0..player count - 1).
 @export var team_id: int = 0
@@ -20,6 +21,10 @@ var is_highlighted: bool = false
 ## White so it reads against every team colour (including green).
 const HIGHLIGHT_COLOR := Color(1.0, 1.0, 1.0)
 const HIGHLIGHT_RADIUS := 30.0
+const STATUS_RADIUS := 24.0
+
+## Ring showing a lasting effect on this pawn (e.g. a shield); alpha 0 = none.
+var status_color: Color = Color(0, 0, 0, 0)
 
 @onready var sprite: Sprite2D = $Sprite2D
 
@@ -49,7 +54,15 @@ func set_highlighted(on: bool) -> void:
 func _process(_delta: float) -> void:
 	queue_redraw()
 
+func set_status_color(color: Color) -> void:
+	if color == status_color:
+		return
+	status_color = color
+	queue_redraw()
+
 func _draw() -> void:
+	if status_color.a > 0.0:
+		draw_arc(Vector2.ZERO, STATUS_RADIUS, 0.0, TAU, 40, status_color, 5.0, true)
 	if not is_highlighted:
 		return
 	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 150.0)
@@ -94,6 +107,7 @@ func move_along_path(path_coordinates: Array[Vector2]) -> void:
 func _on_input_event(_viewport, event, _shape_idx) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		print("Pawn clicked: ", name)
+		clicked.emit(self)
 		var manager = get_tree().current_scene
 		if not manager is GameManager:
 			manager = get_tree().current_scene.find_child("GameManager*", true, false)

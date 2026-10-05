@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="CardData" format=3]
+
+[ext_resource type="Script" path="res://cards/CardEffect.gd" id="1_istfj"]
+[ext_resource type="Script" path="res://cards/effects/UnlockInnerRingEffect.gd" id="2_womwe"]
+[ext_resource type="Script" path="res://cards/CardData.gd" id="3_lkgvl"]
+[ext_resource type="Script" path="res://cards/CardTarget.gd" id="4_o8h73"]
+
+[sub_resource type="Resource" id="Resource_noune"]
+script = ExtResource("2_womwe")
+
+[resource]
+script = ExtResource("3_lkgvl")
+id = &"master_key"
+title = "Master Key"
+description = "Open your inner ring without a capture."
+color = Color(0.5, 0.35, 0.75, 1)
+effects = Array[ExtResource("1_istfj")]([SubResource("Resource_noune")])
