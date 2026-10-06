@@ -280,7 +280,9 @@ func _waiting(what: String) -> String:
 
 # --- TEXT HELPERS ---
 func _who(player_id: int) -> String:
-	return "[b][color=#%s]%s[/color][/b]" % [_gm.get_player_color(player_id).to_html(false), _gm.get_player_name(player_id)]
+	# Names come from other players: escape "[" so a name can't inject BBCode into the log
+	var safe_name := _gm.get_player_name(player_id).replace("[", "[lb]")
+	return "[b][color=#%s]%s[/color][/b]" % [_gm.get_player_color(player_id).to_html(false), safe_name]
 
 func _describe_tile(tile: int) -> String:
 	var data := _gm.board.board_data
@@ -360,7 +362,7 @@ func _on_throw_pool_changed(pool: Array[int], exhausted: Array[int], selected: i
 		chip.text = str(pool[i])
 		chip.custom_minimum_size = Vector2(38, 34)
 		chip.add_theme_font_size_override("font_size", 18)
-		var usable := choosing and _gm.is_local_turn() and _gm._is_throw_usable(pool[i])
+		var usable := choosing and _gm.is_local_turn() and _gm.can_use_throw(pool[i])
 		chip.disabled = not usable
 		chip.tooltip_text = "Use this throw" if usable else "No pawn can use this throw right now"
 		if i == selected and choosing:

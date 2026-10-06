@@ -25,3 +25,6 @@ CLAUDE.md
 .claude/
 .continue/
 knowledge/
+
+# Exported builds (bash tools/export_builds.sh)
+build/

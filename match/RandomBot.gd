@@ -26,9 +26,9 @@ static func step(gm: GameManager, ctrl: MatchController, rng: RandomNumberGenera
 			# Sometimes switch to another usable throw first
 			if gm.throw_pool.size() > 1 and rng.randf() < 0.3:
 				var other := rng.randi() % gm.throw_pool.size()
-				if gm._is_throw_usable(gm.throw_pool[other]):
+				if gm.can_use_throw(gm.throw_pool[other]):
 					ctrl.select_throw(other)
 					return
-			var movable := gm._get_movable_pawns(gm.current_roll)
+			var movable := gm.get_movable_pawns(gm.current_roll)
 			if not movable.is_empty():
 				ctrl.move_pawn(movable[rng.randi() % movable.size()])

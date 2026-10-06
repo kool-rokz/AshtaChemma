@@ -3,18 +3,15 @@ extends Control
 ## Main menu (the game's first screen): pick your name, then Host a game or Join one.
 ## Both lead to the lobby: players and their colours, the host's card setting, and
 ## the host's Start button. Online only; the match itself is MainGame.tscn.
-##
-## Developer flags (Godot: Debug > Customize Run Instances, or after `--` on the command line):
-##   --host [--port=9080] [--autostart=N] [--no-cards]   host at once (start when N players are in)
-##   --join=ADDRESS                                        join at once
-##   --name=NAME   --bot (this window plays its seat by itself)
-##   --no-mcp (extra test windows: detach the editor's MCP tools so they reach only one game)
+## Developer command-line options (--host, --join, --bot...): see net/DevFlags.gd.
 
 const SETTINGS_PATH := "user://settings.cfg"
-const NAME_MAX_LENGTH := 16
 const MUTED := Color(0.7, 0.7, 0.75)
 const ERROR_COLOR := Color(0.95, 0.45, 0.4)
 
+enum Screen { HOME, JOIN, CONNECTING, LOBBY }
+
+var _screen: Screen = Screen.HOME
 var _content: VBoxContainer
 var _net: NetSession
 var _settings := ConfigFile.new()
@@ -22,6 +19,8 @@ var _name_edit: LineEdit
 var _error: Label
 var _autostart: int = 0
 var _host_port: int = NetSession.DEFAULT_PORT
+## --no-tunnel (DevFlags): host on the local network only, no room code.
+var _no_tunnel: bool = false
 
 # Lobby widgets (rebuilt on roster changes)
 var _players_box: VBoxContainer
@@ -29,6 +28,9 @@ var _swatches_box: HBoxContainer
 var _cards_toggle: CheckBox
 var _start_button: Button
 var _lobby_status: Label
+var _room_code_label: Label
+var _room_status: Label
+var _copy_button: Button
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -63,9 +65,20 @@ func _setup() -> void:
 	_net.roster_changed.connect(_on_roster_changed)
 	_net.settings_changed.connect(_on_settings_changed)
 	_net.joined.connect(_on_joined)
-	_net.connection_failed.connect(_show_home)
+	_net.connection_failed.connect(_on_join_failed)
 	_net.disconnected.connect(_show_home)
-	if not _apply_dev_flags():
+	_net.join_retrying.connect(_on_join_retrying)
+	_net.room_status.connect(_on_room_status)
+	_net.room_code_ready.connect(_on_room_code_ready)
+	_net.room_code_failed.connect(_on_room_code_failed)
+	if _apply_dev_flags():
+		return
+	# Web invite links: .../index.html?room=brave-lemon-kite-maple opens Join with the code filled in
+	var invited := _room_from_page_url()
+	if invited != "":
+		_settings.set_value("player", "last_address", invited)
+		_show_join()
+	else:
 		_show_home()
 
 func _on_roster_changed(_roster: Array) -> void:
@@ -77,6 +90,45 @@ func _on_settings_changed(_settings_now: Dictionary) -> void:
 func _on_joined(_seat: int) -> void:
 	_show_lobby()
 
+func _on_join_failed(reason: String) -> void:
+	_show_join(reason)
+
+func _on_join_retrying(attempt: int) -> void:
+	if _screen == Screen.CONNECTING:
+		_show_connecting(_settings.get_value("player", "last_address", ""), "Not answering yet, trying again (%d of %d)..." % [attempt, NetSession.JOIN_ATTEMPTS])
+
+func _on_room_status(text: String) -> void:
+	if _screen == Screen.LOBBY and _room_status and is_instance_valid(_room_status):
+		_room_status.text = text
+
+func _on_room_code_ready(code: String, live: bool) -> void:
+	if _screen == Screen.LOBBY and _room_code_label and is_instance_valid(_room_code_label):
+		_room_code_label.text = code
+		_room_status.text = "Share this code. Friends pick Join a game and type it in (PC or browser)." if live \
+			else "Cloudflare is slow to confirm this code; it may take a minute before friends can join."
+		_copy_button.visible = true
+
+func _on_room_code_failed(reason: String) -> void:
+	if _screen == Screen.LOBBY and _room_code_label and is_instance_valid(_room_code_label):
+		_room_code_label.text = "No room code"
+		_room_status.text = reason + " Friends on your network can still use the address below."
+
+## Copies the code, plus the game's web page if one is set (GameConfig.PLAY_URL).
+func _copy_invite() -> void:
+	var code := _net.room_code
+	var text := "Join my Ashta Chemma game! Room code: %s" % code
+	if GameConfig.PLAY_URL != "":
+		text = "Join my Ashta Chemma game: %s  (Join a game, room code: %s)" % [GameConfig.PLAY_URL, code]
+	DisplayServer.clipboard_set(text)
+	_room_status.text = "Copied! Paste it to your friends."
+
+## Web builds: the room code from the page address, if the invite link carried one.
+func _room_from_page_url() -> String:
+	if not OS.has_feature("web"):
+		return ""
+	var room: Variant = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('room') || ''")
+	return str(room).strip_edges() if room != null else ""
+
 # --- SCREENS ---
 func _clear() -> void:
 	for child in _content.get_children():
@@ -85,13 +137,14 @@ func _clear() -> void:
 
 func _show_home(error: String = "") -> void:
 	_clear()
+	_screen = Screen.HOME
 	_content.add_child(_label("Ashta Chemma", 44))
 	_content.add_child(_label("Online with friends", 18, MUTED))
 
 	_content.add_child(_label("Your name", 16, MUTED, HORIZONTAL_ALIGNMENT_LEFT))
 	_name_edit = LineEdit.new()
 	_name_edit.name = "PlayerName"
-	_name_edit.max_length = NAME_MAX_LENGTH
+	_name_edit.max_length = GameConfig.NAME_MAX_LENGTH
 	_name_edit.placeholder_text = "Player"
 	_name_edit.text = _settings.get_value("player", "name", "")
 	_name_edit.custom_minimum_size = Vector2(0, 44)
@@ -109,15 +162,17 @@ func _show_home(error: String = "") -> void:
 	join.pressed.connect(_show_join)
 	_content.add_child(join)
 	_add_error(error)
+	_content.add_child(_label("v" + GameConfig.GAME_VERSION, 12, Color(0.45, 0.45, 0.5)))
 
 func _show_join(error: String = "") -> void:
 	_remember_name()
 	_clear()
+	_screen = Screen.JOIN
 	_content.add_child(_label("Join a game", 32))
-	_content.add_child(_label("Address the host gave you, e.g. 192.168.1.23:9080", 15, MUTED))
+	_content.add_child(_label("Type the room code the host gave you (or an address like 192.168.1.23:9080 on the same network).", 15, MUTED))
 	var address := LineEdit.new()
 	address.name = "JoinAddress"
-	address.placeholder_text = "address:port"
+	address.placeholder_text = "room code, e.g. brave-lemon-kite-maple"
 	address.text = _settings.get_value("player", "last_address", "")
 	address.custom_minimum_size = Vector2(0, 44)
 	address.add_theme_font_size_override("font_size", 18)
@@ -136,10 +191,13 @@ func _show_join(error: String = "") -> void:
 	_content.add_child(actions)
 	_add_error(error)
 
-func _show_connecting(url: String) -> void:
+func _show_connecting(where: String, note: String = "") -> void:
 	_clear()
+	_screen = Screen.CONNECTING
 	_content.add_child(_label("Connecting...", 28))
-	_content.add_child(_label(url, 15, MUTED))
+	_content.add_child(_label(where, 15, MUTED))
+	if note != "":
+		_content.add_child(_label(note, 15, MUTED))
 	var cancel := _button("Cancel", Vector2(160, 48))
 	cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	cancel.pressed.connect(func():
@@ -149,13 +207,24 @@ func _show_connecting(url: String) -> void:
 
 func _show_lobby() -> void:
 	_clear()
+	_screen = Screen.LOBBY
 	_content.add_child(_label("Lobby", 32))
 	if _net.is_host():
-		_content.add_child(_label("Friends join with one of these addresses:", 15, MUTED))
-		var addresses := _label("\n".join(_lan_addresses()), 18)
+		_content.add_child(_label("Room code", 15, MUTED))
+		_room_code_label = _label(_net.room_code if _net.room_code != "" else "...", 30, Color(1.0, 0.85, 0.4))
+		_room_code_label.name = "RoomCode"
+		_content.add_child(_room_code_label)
+		_room_status = _label("Getting a room code...", 14, MUTED)
+		_content.add_child(_room_status)
+		_copy_button = _button("Copy invite", Vector2(220, 40))
+		_copy_button.name = "CopyInvite"
+		_copy_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_copy_button.visible = _net.room_code != ""
+		_copy_button.pressed.connect(_copy_invite)
+		_content.add_child(_copy_button)
+		var addresses := _label("Same network: " + ", ".join(_lan_addresses()), 13, MUTED)
 		addresses.name = "HostAddresses"
 		_content.add_child(addresses)
-		_content.add_child(_label("(Same network for now; room codes for playing over the internet are coming.)", 13, MUTED))
 
 	_players_box = VBoxContainer.new()
 	_players_box.add_theme_constant_override("separation", 8)
@@ -272,6 +341,10 @@ func _host(port: int = NetSession.DEFAULT_PORT) -> void:
 		_show_home("Couldn't host on port %d (%s). Is another game already hosting?" % [port, error_string(err)])
 		return
 	_show_lobby()
+	if not _no_tunnel:
+		_net.open_room_code(port)
+	else:
+		_on_room_code_failed("Room code off (--no-tunnel).")
 
 func _join(address: String) -> void:
 	var url := NetSession.address_to_url(address)
@@ -284,7 +357,7 @@ func _join(address: String) -> void:
 	if err != OK:
 		_show_join("Couldn't connect (%s)." % error_string(err))
 		return
-	_show_connecting(url)
+	_show_connecting(address.strip_edges())
 
 ## This PC's addresses on the local network, for friends on the same Wi-Fi.
 func _lan_addresses() -> Array[String]:
@@ -296,27 +369,16 @@ func _lan_addresses() -> Array[String]:
 		result.append("127.0.0.1:%d (this PC only)" % _host_port)
 	return result
 
-## Developer command-line flags. Returns true if one was used.
+## Developer command-line options (DevFlags; debug builds only). Returns true if used.
 func _apply_dev_flags() -> bool:
-	var opts := {}
-	for arg in OS.get_cmdline_user_args():
-		var key := arg.get_slice("=", 0)
-		opts[key] = arg.get_slice("=", 1) if "=" in arg else "true"
-	if not opts.has("--host") and not opts.has("--join"):
+	var opts := DevFlags.parse()
+	if opts.is_empty():
 		return false
 	if opts.has("--name"):
 		_settings.set_value("player", "name", opts["--name"])
-	if opts.has("--no-mcp"):
-		for tool_name in ["MCPGameInspector", "MCPScreenshot", "MCPInputService"]:
-			var tool := get_tree().root.get_node_or_null(tool_name)
-			if tool:
-				tool.queue_free()
-	if opts.has("--bot"):
-		_net.auto_draft = true
-		var bot := DevBot.new()
-		bot.name = "DevBot"
-		get_tree().root.add_child(bot)
+	DevFlags.apply_tooling(opts, get_tree())
 	_show_home()
+	_no_tunnel = opts.has("--no-tunnel")
 	if opts.has("--host"):
 		_host_port = int(opts.get("--port", NetSession.DEFAULT_PORT))
 		_autostart = int(opts.get("--autostart", "0"))

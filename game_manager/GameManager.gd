@@ -342,6 +342,14 @@ func is_game_finished() -> bool:
 func can_move_pawn(pawn: Pawn, steps: int, obey_rules: bool = true) -> bool:
 	return _validate_move(pawn, steps, obey_rules)
 
+## Pawns of the current player that can legally move `steps`.
+func get_movable_pawns(steps: int) -> Array[Pawn]:
+	return _get_movable_pawns(steps)
+
+## Can any pawn of the current player use a throw of `value`?
+func can_use_throw(value: int) -> bool:
+	return _is_throw_usable(value)
+
 # --- INPUT HANDLERS ---
 ## Throw now (offline/tests): generate + apply in one go.
 func request_roll_dice() -> void:

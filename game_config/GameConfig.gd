@@ -7,6 +7,13 @@ extends RefCounted
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 4
 const PAWNS_PER_PLAYER := 4
+const NAME_MAX_LENGTH := 16
+
+## Shown in the menu. Bump when shipping a build.
+const GAME_VERSION := "0.3.0"
+## Bump whenever online messages or game rules change in a way older builds would
+## misread: the host refuses players whose build speaks a different protocol.
+const PROTOCOL_VERSION := 1
 
 ## Pawn colour choices, in default assignment order.
 const COLORS: Dictionary = {
@@ -26,6 +33,10 @@ const SEATS_BY_PLAYER_COUNT: Dictionary = {
 
 ## One entry per player: {"name": String, "color_name": String}. Empty = use defaults.
 static var players: Array[Dictionary] = []
+
+## Where friends can play in a browser (e.g. your itch.io page). Added to copied invites;
+## leave "" to share just the room code.
+const PLAY_URL := ""
 
 ## Experimental card layer (cards/CardManager). false = the plain game, exactly as before.
 static var cards_enabled: bool = false

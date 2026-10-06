@@ -191,6 +191,8 @@ func receive_private(data: Dictionary) -> void:
 
 ## Why `intent` isn't allowed right now ("" = allowed). Uses the real game rules.
 func _validate(intent: PlayerIntent) -> String:
+	if not PlayerIntent.Kind.values().has(intent.kind):
+		return "Unknown action."
 	if game.is_game_finished():
 		return "The game is over."
 	if not _queue.is_empty():
@@ -207,7 +209,7 @@ func _validate(intent: PlayerIntent) -> String:
 		PlayerIntent.Kind.SELECT_THROW:
 			if state != GameManager.GameState.SELECTING_PIECE:
 				return "Not choosing a move."
-			if intent.index < 0 or intent.index >= game.throw_pool.size() or not game._is_throw_usable(game.throw_pool[intent.index]):
+			if intent.index < 0 or intent.index >= game.throw_pool.size() or not game.can_use_throw(game.throw_pool[intent.index]):
 				return "No pawn can use that throw."
 		PlayerIntent.Kind.MOVE_PAWN:
 			if state != GameManager.GameState.SELECTING_PIECE:
@@ -284,7 +286,7 @@ func run_draft() -> void:
 ## Card ids kept from `offer`: the draft screen, or the first ones (auto draft).
 func _pick(player: int, offer: Array, with_cover: bool) -> Array:
 	var picks: Array
-	if card_manager.auto_draft or (net and net.auto_draft):
+	if card_manager.auto_draft or DevFlags.auto_draft:
 		picks = offer.slice(0, card_manager.get_keep_count(offer.size()))
 	else:
 		picks = await card_manager.pick_cards_on_screen(player, offer, with_cover)
@@ -308,8 +310,11 @@ func _process_queue() -> void:
 		if seq != applied_seq + 1:
 			push_error("MatchController: event %d arrived, expected %d" % [seq, applied_seq + 1])
 		var intent := PlayerIntent.from_dict(event["intent"])
-		await _wait_until_ready(intent)
-		_execute(intent, event)
+		if intent == null:
+			push_error("MatchController: malformed event %d skipped" % seq)
+		else:
+			await _wait_until_ready(intent)
+			_execute(intent, event)
 		_queue.pop_front()
 		applied_seq = seq
 		event_applied.emit(event)

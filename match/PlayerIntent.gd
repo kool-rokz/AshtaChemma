@@ -72,18 +72,38 @@ func to_dict() -> Dictionary:
 	if not card_ids.is_empty(): d["cards"] = card_ids.map(func(id): return String(id))
 	return d
 
-static func from_dict(d: Dictionary) -> PlayerIntent:
-	var intent := make(Kind.get(d.get("kind", ""), -1), int(d.get("player", -1)))
-	intent.index = int(d.get("index", -1))
-	intent.pawn = Array(d.get("pawn", [])).map(func(v): return int(v))
-	intent.card_id = StringName(d.get("card", ""))
-	# Numbers may arrive as floats (JSON); ids are ints
-	var raw_target: Dictionary = d.get("target", {})
-	for key in raw_target:
-		var value: Variant = raw_target[key]
-		intent.target[key] = Array(value).map(func(v): return int(v)) if value is Array else int(value)
-	intent.card_ids = Array(d.get("cards", [])).map(func(id): return StringName(id))
+## Parses an intent from the network. Returns null for anything malformed (unknown
+## kind, wrong types), so a buggy or outdated client can never smuggle in an action.
+static func from_dict(d: Variant) -> PlayerIntent:
+	if not d is Dictionary:
+		return null
+	var kind_name: Variant = d.get("kind")
+	if not kind_name is String or not Kind.has(kind_name):
+		return null
+	var intent := make(Kind[kind_name], _as_int(d.get("player"), -1))
+	intent.index = _as_int(d.get("index"), -1)
+	var raw_pawn: Variant = d.get("pawn", [])
+	if raw_pawn is Array and raw_pawn.size() == 2:
+		intent.pawn = [_as_int(raw_pawn[0], -1), _as_int(raw_pawn[1], -1)]
+	var raw_card: Variant = d.get("card", "")
+	if raw_card is String:
+		intent.card_id = StringName(raw_card)
+	# Numbers may arrive as floats (JSON); ids are ints. Only known target keys survive.
+	var raw_target: Variant = d.get("target", {})
+	if raw_target is Dictionary:
+		if raw_target.get("pawn") is Array and raw_target["pawn"].size() == 2:
+			intent.target = {"pawn": [_as_int(raw_target["pawn"][0], -1), _as_int(raw_target["pawn"][1], -1)]}
+		elif raw_target.has("tile"):
+			intent.target = {"tile": _as_int(raw_target["tile"], -1)}
+		elif raw_target.has("player"):
+			intent.target = {"player": _as_int(raw_target["player"], -1)}
+	var raw_cards: Variant = d.get("cards", [])
+	if raw_cards is Array:
+		intent.card_ids = raw_cards.filter(func(id): return id is String or id is StringName).map(func(id): return StringName(id))
 	return intent
+
+static func _as_int(value: Variant, fallback: int) -> int:
+	return int(value) if value is int or value is float else fallback
 
 func _to_string() -> String:
 	return "PlayerIntent(%s)" % JSON.stringify(to_dict())
