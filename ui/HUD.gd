@@ -309,7 +309,7 @@ func _on_throw_pool_changed(pool: Array[int], exhausted: Array[int], selected: i
 		chip.text = str(pool[i])
 		chip.custom_minimum_size = Vector2(38, 34)
 		chip.add_theme_font_size_override("font_size", 18)
-		var usable := choosing and _gm._is_throw_usable(pool[i])
+		var usable := choosing and _gm.is_local_turn() and _gm._is_throw_usable(pool[i])
 		chip.disabled = not usable
 		chip.tooltip_text = "Use this throw" if usable else "No pawn can use this throw right now"
 		if i == selected and choosing:

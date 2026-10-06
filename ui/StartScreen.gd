@@ -14,6 +14,13 @@ var _cards_toggle: CheckBox
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Developer online testing (--host / --join=...) until the real lobby exists
+	var net_opts := DevLobby.from_args(OS.get_cmdline_user_args())
+	if not net_opts.is_empty():
+		var lobby := DevLobby.new()
+		add_child(lobby)
+		lobby.setup.call_deferred(net_opts) # the root is still adding children now
+		return
 	var bg := ColorRect.new()
 	bg.color = Color(0.16, 0.16, 0.19)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)

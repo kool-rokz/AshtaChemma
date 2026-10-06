@@ -48,6 +48,11 @@ var _ui: CardHUD
 ## Set by MatchController; the card UI submits intents through it.
 var controller: MatchController
 
+## A card in someone else's hand that this copy may not see (online). Stored as null.
+const HIDDEN_CARD := "?"
+## to_snapshot() viewer that hides every hand (for state hashes shared between players).
+const PUBLIC_VIEW := -2
+
 func _ready() -> void:
 	if not GameConfig.cards_enabled or game == null:
 		queue_free()
@@ -97,8 +102,9 @@ func make_offer() -> Array:
 	return offer
 
 ## Lets a player pick from their offer on screen; returns the kept cards.
-func pick_cards_on_screen(player: int, offer: Array) -> Array:
-	return await _ui.run_draft(player, offer, get_keep_count(offer.size()))
+## with_cover: show a "pass to <player>" screen first (one shared screen, offline).
+func pick_cards_on_screen(player: int, offer: Array, with_cover: bool = true) -> Array:
+	return await _ui.run_draft(player, offer, get_keep_count(offer.size()), with_cover)
 
 ## Hot-seat cover before the first turn.
 func show_start_cover() -> void:
@@ -109,12 +115,21 @@ func set_hand(player: int, cards: Array) -> void:
 	hands[player] = cards.duplicate()
 	hand_changed.emit(player)
 
+## Hidden ids (HIDDEN_CARD) become null: a card this copy knows exists but can't see.
 func set_hand_by_ids(player: int, ids: Array) -> void:
-	set_hand(player, ids.map(func(id): return find_card(id)))
+	set_hand(player, ids.map(func(id): return null if String(id) == HIDDEN_CARD else find_card(StringName(id))))
+
+## A hidden card was just played: put it in place of one unknown card in that hand.
+func reveal_card(player: int, card_id: StringName) -> void:
+	if find_hand_index(player, card_id) >= 0:
+		return
+	var unknown: int = hands[player].find(null)
+	if unknown >= 0:
+		hands[player][unknown] = find_card(card_id)
 
 func find_hand_index(player: int, card_id: StringName) -> int:
 	for i in hands[player].size():
-		if hands[player][i].id == card_id:
+		if hands[player][i] != null and hands[player][i].id == card_id:
 			return i
 	return -1
 
@@ -335,6 +350,8 @@ func _raw_candidates(spec: CardTarget, player: int) -> Array:
 	return result
 
 func _show_target_highlights(spec: CardTarget, candidates: Array) -> void:
+	if controller and not controller.is_local_turn():
+		return # only the player picking sees the choices
 	if spec.is_pawn():
 		for pawn in candidates:
 			pawn.set_highlighted(true)
@@ -440,7 +457,9 @@ func _on_game_over(_winner: int) -> void:
 
 # --- SNAPSHOT (rejoin, autosave, desync checks) ---
 ## Card state as plain data. Taken between card plays (never mid-targeting).
-func to_snapshot() -> Dictionary:
+## viewer: -1 = everything this copy knows; a seat = only that seat's hand visible;
+## PUBLIC_VIEW = no hand visible (hands as hidden cards, i.e. counts).
+func to_snapshot(viewer: int = -1) -> Dictionary:
 	var modifiers: Array = []
 	for active in active_modifiers:
 		modifiers.append({
@@ -453,7 +472,9 @@ func to_snapshot() -> Dictionary:
 			"turns_left": active.turns_left,
 		})
 	return {
-		"hands": hands.map(func(hand): return hand.map(func(card): return String(card.id))),
+		"hands": range(hands.size()).map(func(p): return hands[p].map(func(card):
+			var visible: bool = card != null and (viewer == -1 or viewer == p)
+			return String(card.id) if visible else HIDDEN_CARD)),
 		"played_this_turn": _played_this_turn,
 		"window_open": _window_open,
 		"cards_played": cards_played,
@@ -465,7 +486,7 @@ func load_snapshot(snap: Dictionary) -> void:
 	_clear_target_highlights()
 	var saved_hands: Array = snap["hands"]
 	for player in saved_hands.size():
-		hands[player] = Array(saved_hands[player]).map(func(id): return find_card(StringName(id)))
+		hands[player] = Array(saved_hands[player]).map(func(id): return null if String(id) == HIDDEN_CARD else find_card(StringName(id)))
 	_played_this_turn = int(snap["played_this_turn"])
 	_window_open = bool(snap["window_open"])
 	cards_played = int(snap["cards_played"])

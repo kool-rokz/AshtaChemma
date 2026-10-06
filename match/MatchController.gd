@@ -6,9 +6,11 @@ extends Node
 ##   rules, adds random results (shell throws), numbers it as an event
 ##   ──► every copy of the game applies events in order (apply_event), through the
 ##   normal GameManager / CardManager code.
-## OFFLINE: this copy is the authority and all seats are local.
-## REPLICA: applies events from an authority and never decides anything itself
-##   (online clients will work like this; tests use it to prove copies stay in sync).
+## OFFLINE: this copy is the authority and all seats are local (tests, simulations).
+## HOST:    authority for an online match; plays local_seat, takes the other seats'
+##          intents from NetSession, broadcasts events (redacted per seat).
+## CLIENT:  sends its seat's intents to the host and applies the host's events.
+## REPLICA: applies events fed to it and decides nothing (sync tests).
 ## Randomness lives only on the authority: draft offers here, throws via
 ## GameManager.generate_shells(). Everything else is deterministic.
 
@@ -18,12 +20,16 @@ signal event_created(event: Dictionary)
 signal event_applied(event: Dictionary)
 signal intent_rejected(intent: PlayerIntent, reason: String)
 
-enum Mode { OFFLINE, REPLICA }
+enum Mode { OFFLINE, HOST, CLIENT, REPLICA }
 
 @export var game: GameManager
 ## Optional: freed when cards are off.
 @export var card_manager: CardManager
 @export var mode: Mode = Mode.OFFLINE
+## Online connection (found automatically under the scene root; tests may set it).
+var net: NetSession
+## The seat this copy plays online (-1 = offline: whoever's turn it is).
+var local_seat: int = -1
 
 ## Authority: number of the next event.
 var next_seq: int = 0
@@ -35,6 +41,8 @@ var _processing: bool = false
 ## Authority: each player's private draft offer (CardData), to check their picks.
 var _offers: Dictionary = {}
 var _drafted: Dictionary = {}
+## Client: this seat's private draft offer from the host.
+var _my_offer: Array = []
 ## A click on a pawn also reaches the tile under it; ignore the echo after a pick.
 var _last_pick_msec: int = -1000
 
@@ -43,6 +51,12 @@ const PICK_ECHO_MSEC := 150
 const READY_TIMEOUT := 30.0
 
 func _ready() -> void:
+	if net == null:
+		net = NetSession.find(get_tree())
+	if net and net.is_online():
+		mode = Mode.HOST if net.is_host() else Mode.CLIENT
+		local_seat = net.local_seat
+		game.local_seat = local_seat
 	if card_manager and (card_manager.is_queued_for_deletion() or not GameConfig.cards_enabled):
 		card_manager = null
 	if card_manager:
@@ -53,6 +67,8 @@ func _ready() -> void:
 	game.board.tile_clicked.connect(_on_tile_clicked)
 	for pawn in game.get_all_pawns():
 		pawn.clicked.connect(_on_pawn_clicked)
+	if mode in [Mode.HOST, Mode.CLIENT]:
+		net.register_controller(self) # delivers anything that arrived while loading
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _cards() or not card_manager.is_targeting():
@@ -66,28 +82,36 @@ func _cards() -> bool:
 	return card_manager != null
 
 func is_authority() -> bool:
-	return mode == Mode.OFFLINE
+	return mode == Mode.OFFLINE or mode == Mode.HOST
 
-# --- INPUT → INTENTS (the acting player is whoever's turn it is; online: this seat) ---
+## The seat this copy acts for: its own online, whoever's turn it is offline.
+func acting_seat() -> int:
+	return local_seat if local_seat >= 0 else game.current_player_index
+
+## Is it this copy's turn (always true offline)?
+func is_local_turn() -> bool:
+	return local_seat < 0 or local_seat == game.current_player_index
+
+# --- INPUT → INTENTS ---
 func throw_shells() -> bool:
-	return submit(PlayerIntent.throw_shells(game.current_player_index))
+	return submit(PlayerIntent.throw_shells(acting_seat()))
 
 func select_throw(index: int) -> bool:
-	return submit(PlayerIntent.select_throw(game.current_player_index, index))
+	return submit(PlayerIntent.select_throw(acting_seat(), index))
 
 func move_pawn(pawn: Pawn) -> bool:
-	return submit(PlayerIntent.move_pawn(game.current_player_index, game.get_pawn_ref(pawn)))
+	return submit(PlayerIntent.move_pawn(acting_seat(), game.get_pawn_ref(pawn)))
 
 func play_card(card_id: StringName) -> bool:
-	return submit(PlayerIntent.play_card(game.current_player_index, card_id))
+	return submit(PlayerIntent.play_card(acting_seat(), card_id))
 
 func choose_target(target: Variant) -> bool:
 	if not _cards() or not card_manager.is_targeting():
 		return false
-	return submit(PlayerIntent.choose_target(game.current_player_index, card_manager.target_to_ref(target)))
+	return submit(PlayerIntent.choose_target(acting_seat(), card_manager.target_to_ref(target)))
 
 func cancel_card() -> bool:
-	return submit(PlayerIntent.cancel_card(game.current_player_index))
+	return submit(PlayerIntent.cancel_card(acting_seat()))
 
 func _on_pawn_clicked(pawn: Pawn) -> void:
 	if Time.get_ticks_msec() - _last_pick_msec < PICK_ECHO_MSEC:
@@ -108,21 +132,52 @@ func _on_tile_clicked(tile: int) -> void:
 		_last_pick_msec = Time.get_ticks_msec()
 
 # --- AUTHORITY ---
-## Validate an intent and, if allowed, turn it into the next event. Returns true if accepted.
+## Validate an intent and, if allowed, turn it into the next event. Returns true if
+## accepted (clients: true once sent; the host decides).
 func submit(intent: PlayerIntent) -> bool:
-	if not is_authority():
-		return false # online clients will send the intent to the host here
+	match mode:
+		Mode.CLIENT:
+			net.send_intent(intent.to_dict())
+			return true
+		Mode.REPLICA:
+			return false
+	return _authorize(intent, false)
+
+## Host: an intent from another seat. The seat comes from the connection, never the message.
+func submit_remote(intent: PlayerIntent, seat: int) -> bool:
+	intent.player = seat
+	return _authorize(intent, true)
+
+func _authorize(intent: PlayerIntent, remote: bool) -> bool:
 	var reason := _validate(intent)
 	if reason != "":
 		_reject(intent, reason)
+		if remote:
+			net.send_rejected(intent.player, intent.to_dict(), reason)
 		return false
 	var event := {"seq": next_seq, "intent": intent.to_dict()}
 	next_seq += 1
 	if intent.kind == PlayerIntent.Kind.THROW:
 		event["shells"] = Array(game.generate_shells())
 	event_created.emit(event)
+	if mode == Mode.HOST:
+		net.broadcast_event(event)
 	_enqueue(event)
 	return true
+
+## What `seat` may see of an event: other players' draft picks become hidden cards.
+func event_for_seat(event: Dictionary, seat: int) -> Dictionary:
+	var intent: Dictionary = event["intent"]
+	if intent.get("kind") == "DRAFT_PICKS" and int(intent["player"]) != seat:
+		var redacted := event.duplicate(true)
+		redacted["intent"]["cards"] = Array(intent["cards"]).map(func(_id): return CardManager.HIDDEN_CARD)
+		return redacted
+	return event
+
+## Client: private data from the host (draft offer).
+func receive_private(data: Dictionary) -> void:
+	if data.has("offer") and _cards():
+		_my_offer = Array(data["offer"]).map(func(id): return card_manager.find_card(StringName(id)))
 
 ## Why `intent` isn't allowed right now ("" = allowed). Uses the real game rules.
 func _validate(intent: PlayerIntent) -> String:
@@ -190,23 +245,38 @@ func _reject(intent: PlayerIntent, reason: String) -> void:
 	intent_rejected.emit(intent, reason)
 
 ## Pre-game (awaited by GameManager): each player keeps cards from a private offer.
-## The authority deals offers; replicas just wait for the picks to arrive as events.
+## Offline: one screen with pass-the-device covers. Online: everyone picks at once on
+## their own screen; the host deals the offers and checks the picks.
 func run_draft() -> void:
-	if not is_authority():
-		while _drafted.size() < game.players.size():
-			await get_tree().process_frame
-		return
-	for player in game.players.size():
-		var offer := card_manager.make_offer()
-		_offers[player] = offer
-		var picks: Array
-		if card_manager.auto_draft:
-			picks = offer.slice(0, card_manager.get_keep_count(offer.size()))
-		else:
-			picks = await card_manager.pick_cards_on_screen(player, offer)
-		submit(PlayerIntent.draft_picks(player, picks.map(func(c): return c.id)))
-	if not card_manager.auto_draft:
-		await card_manager.show_start_cover()
+	match mode:
+		Mode.OFFLINE:
+			for player in game.players.size():
+				var offer := card_manager.make_offer()
+				_offers[player] = offer
+				submit(PlayerIntent.draft_picks(player, await _pick(player, offer, true)))
+			if not card_manager.auto_draft:
+				await card_manager.show_start_cover()
+		Mode.HOST:
+			for seat in game.players.size():
+				_offers[seat] = card_manager.make_offer()
+				if seat != local_seat:
+					net.send_private(seat, {"offer": _offers[seat].map(func(c): return String(c.id))})
+			submit(PlayerIntent.draft_picks(local_seat, await _pick(local_seat, _offers[local_seat], false)))
+		Mode.CLIENT:
+			while _my_offer.is_empty():
+				await get_tree().process_frame
+			submit(PlayerIntent.draft_picks(local_seat, await _pick(local_seat, _my_offer, false)))
+	while _drafted.size() < game.players.size():
+		await get_tree().process_frame
+
+## Card ids kept from `offer`: the draft screen, or the first ones (auto draft).
+func _pick(player: int, offer: Array, with_cover: bool) -> Array:
+	var picks: Array
+	if card_manager.auto_draft or (net and net.auto_draft):
+		picks = offer.slice(0, card_manager.get_keep_count(offer.size()))
+	else:
+		picks = await card_manager.pick_cards_on_screen(player, offer, with_cover)
+	return picks.map(func(c): return c.id)
 
 # --- EVERY COPY: apply events in order ---
 ## Feed an event from the authority (replicas, and later the network).
@@ -268,6 +338,7 @@ func _execute(intent: PlayerIntent, event: Dictionary) -> void:
 		PlayerIntent.Kind.MOVE_PAWN:
 			game.request_select_pawn(game.get_pawn_by_ref(intent.pawn))
 		PlayerIntent.Kind.PLAY_CARD:
+			card_manager.reveal_card(intent.player, intent.card_id) # hidden on other seats until now
 			card_manager.request_play_card(intent.card_id)
 		PlayerIntent.Kind.CHOOSE_TARGET:
 			card_manager.choose_target(card_manager.ref_to_target(intent.target))
@@ -279,11 +350,13 @@ func _execute(intent: PlayerIntent, event: Dictionary) -> void:
 
 # --- SNAPSHOT ---
 ## Whole match state (game + cards + event number). Take it while game.is_settled().
-func get_snapshot() -> Dictionary:
+## viewer: -1 = everything this copy knows; a seat = hide the other seats' hands;
+## CardManager.PUBLIC_VIEW = hide every hand.
+func get_snapshot(viewer: int = -1) -> Dictionary:
 	return {
 		"seq": applied_seq,
 		"game": game.to_snapshot(),
-		"cards": card_manager.to_snapshot() if _cards() else {},
+		"cards": card_manager.to_snapshot(viewer) if _cards() else {},
 	}
 
 func load_snapshot(snap: Dictionary) -> void:
@@ -293,8 +366,8 @@ func load_snapshot(snap: Dictionary) -> void:
 		card_manager.load_snapshot(snap["cards"])
 	game.load_snapshot(snap["game"])
 
-## Fingerprint of the match state; equal on every copy that's in sync.
+## Fingerprint of the public match state (hands as counts); equal on every copy in sync.
 func get_state_hash() -> String:
-	var snap := get_snapshot()
+	var snap := get_snapshot(CardManager.PUBLIC_VIEW)
 	snap.erase("seq")
 	return GameManager.hash_snapshot(snap)

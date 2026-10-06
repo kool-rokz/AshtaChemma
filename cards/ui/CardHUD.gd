@@ -107,22 +107,29 @@ func _apply_refresh() -> void:
 	_refresh_queued = false
 	if _cm == null or _game.players.is_empty():
 		return
-	var player := _game.current_player_index
+	# Offline: the current player's hand. Online: always this screen's own hand.
+	var online := _cm.controller != null and _cm.controller.local_seat >= 0
+	var player := _cm.controller.local_seat if online else _game.current_player_index
+	var my_turn := player == _game.current_player_index
 	var hand: Array = _cm.hands[player] if player < _cm.hands.size() else []
-	var targeting := _cm.is_targeting()
+	var targeting := _cm.is_targeting() and my_turn
+	if online:
+		_revealed = true # nobody else looks at this screen
 
 	# Card time = this player may still play a card (before their first throw).
 	var card_time := _cm.can_play_now(player) and not _cm.get_playable_cards(player).is_empty()
 
 	_cancel_button.visible = targeting
-	_toggle_button.visible = not targeting and not hand.is_empty()
+	_toggle_button.visible = not targeting and not hand.is_empty() and not online
 	_toggle_button.text = "Hide cards" if _revealed else "Show cards (%d)" % hand.size()
 	var title_color := MUTED_COLOR
 	if targeting:
 		_hand_title.text = _cm.get_current_target_spec().get_prompt() + " (right-click to cancel)"
 		title_color = TEXT_COLOR
 	elif hand.is_empty():
-		_hand_title.text = "%s has no cards left" % _game.get_player_name(player)
+		_hand_title.text = "No cards left" if online else "%s has no cards left" % _game.get_player_name(player)
+	elif not my_turn:
+		_hand_title.text = "Your cards: playable on your turn, before you throw"
 	elif card_time:
 		_hand_title.text = "Card time: play one BEFORE you throw"
 		title_color = _game.get_player_color(player)
@@ -215,8 +222,9 @@ func show_pass_cover(player: int, button_text: String = "") -> void:
 	_overlay.visible = false
 
 ## Private draft for one player: a cover first, then pick `keep` of `offer`.
-func run_draft(player: int, offer: Array, keep: int) -> Array:
-	await show_pass_cover(player)
+func run_draft(player: int, offer: Array, keep: int, with_cover: bool = true) -> Array:
+	if with_cover:
+		await show_pass_cover(player)
 	_clear_overlay()
 	_overlay.visible = true
 
@@ -288,17 +296,22 @@ func _on_turn_changed(_player: int) -> void:
 	_refresh()
 
 func _on_play_window_changed(open: bool) -> void:
-	if open and not _cm.hands[_game.current_player_index].is_empty():
+	var my_turn := _cm.controller == null or _cm.controller.is_local_turn()
+	if open and my_turn and not _cm.hands[_game.current_player_index].is_empty():
 		_hud.set_hint("Card time: play a card first if you like (Show cards). Throwing the shells ends card play for this turn.")
 	_refresh()
 
-func _on_targeting_started(_player: int, card: CardData, spec: CardTarget, candidates: Array) -> void:
-	_hud.set_hint("%s: %s (%d option%s). Right-click or Esc to cancel." % [
-		card.title, spec.get_prompt(), candidates.size(), "" if candidates.size() == 1 else "s"])
+func _on_targeting_started(player: int, card: CardData, spec: CardTarget, candidates: Array) -> void:
+	if _cm.controller and not _cm.controller.is_local_turn():
+		_hud.set_hint("%s is playing a card..." % _game.get_player_name(player)) # revealed once played
+	else:
+		_hud.set_hint("%s: %s (%d option%s). Right-click or Esc to cancel." % [
+			card.title, spec.get_prompt(), candidates.size(), "" if candidates.size() == 1 else "s"])
 	_refresh()
 
 func _on_targeting_cancelled(_player: int, _card: CardData) -> void:
-	_hud.set_hint("Card cancelled. Play a card or throw the shells.")
+	if _cm.controller == null or _cm.controller.is_local_turn():
+		_hud.set_hint("Card cancelled. Play a card or throw the shells.")
 	_refresh()
 
 func _on_card_played(player: int, card: CardData, targets: Array) -> void:

@@ -85,6 +85,9 @@ var player_seats: Array[int] = []
 var pawn_containers: Array[Node] = []
 
 var current_player_index: int = 0
+## Online: the seat this copy plays (set by MatchController). -1 = offline, every seat local.
+## Only affects what this screen offers (Throw button, highlights), never the rules.
+var local_seat: int = -1
 ## The throw value being applied (the selected pool entry); used by move validation.
 var current_roll: int = 0
 ## Path steps 0..15 are the outer ring; 16+ is the inner spiral ending at home.
@@ -130,7 +133,7 @@ func set_state(new_state: GameState) -> void:
 			set_state(GameState.WAITING_FOR_ROLL)
 
 		GameState.WAITING_FOR_ROLL:
-			roll_button.disabled = false
+			roll_button.disabled = not is_local_turn()
 
 		GameState.SELECTING_PIECE, GameState.MOVING, GameState.PLAYING_CARD:
 			roll_button.disabled = true
@@ -254,6 +257,10 @@ func get_pawn_by_ref(ref: Array) -> Pawn:
 	if ref[1] < 0 or ref[1] >= container.get_child_count():
 		return null
 	return container.get_child(ref[1]) as Pawn
+
+## Is it this screen's turn to act (always true offline)?
+func is_local_turn() -> bool:
+	return local_seat < 0 or local_seat == current_player_index
 
 ## True when waiting for player input (not animating or between turns).
 func is_settled() -> bool:
@@ -492,7 +499,7 @@ func _apply_selection() -> void:
 	var movable := _get_movable_pawns(current_roll)
 	for p in pawn_containers[current_player_index].get_children():
 		if p is Pawn:
-			p.set_highlighted(movable.has(p))
+			p.set_highlighted(movable.has(p) and is_local_turn())
 	valid_moves_highlighted.emit(movable)
 	_emit_pool()
 	_refresh_preview()

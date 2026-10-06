@@ -115,31 +115,5 @@ func _check_snapshot_resume(a_ctrl: MatchController, cards: bool, seed_value: in
 	_check(c_ctrl.applied_seq == a_ctrl.applied_seq, "resumed copy continues from the same event number")
 	c.queue_free()
 
-## One random but legal action through the controller (seeded, so runs repeat).
 func _bot_step(gm: GameManager, ctrl: MatchController) -> void:
-	var cm := ctrl.card_manager
-	match gm.current_state:
-		GameManager.GameState.WAITING_FOR_ROLL:
-			if cm and cm.can_play_now() and _bot.randf() < 0.5:
-				var playable := cm.get_playable_cards(gm.current_player_index)
-				if not playable.is_empty():
-					ctrl.play_card(cm.hands[gm.current_player_index][playable[_bot.randi() % playable.size()]].id)
-					return
-			ctrl.throw_shells()
-		GameManager.GameState.PLAYING_CARD:
-			if cm and cm.is_targeting():
-				var candidates := cm.get_target_candidates()
-				if _bot.randf() < 0.1:
-					ctrl.cancel_card()
-				else:
-					ctrl.choose_target(candidates[_bot.randi() % candidates.size()])
-		GameManager.GameState.SELECTING_PIECE:
-			# Sometimes switch to another usable throw first
-			if gm.throw_pool.size() > 1 and _bot.randf() < 0.3:
-				var other := _bot.randi() % gm.throw_pool.size()
-				if gm._is_throw_usable(gm.throw_pool[other]):
-					ctrl.select_throw(other)
-					return
-			var movable: Array = gm.pawn_containers[gm.current_player_index].get_children().filter(func(p): return p.is_highlighted)
-			if not movable.is_empty():
-				ctrl.move_pawn(movable[_bot.randi() % movable.size()])
+	RandomBot.step(gm, ctrl, _bot)
