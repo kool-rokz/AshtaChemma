@@ -8,7 +8,8 @@ extends Node
 ## Host (peer 1) is the authority and plays seat 0. Messages:
 ##   client -> host   hello(name, token)       join / reclaim a seat
 ##   host -> client   welcome(seat, token)     your seat + reconnect token
-##   host -> all      roster(list)             who's in the room
+##   host -> all      roster(list, settings)   who's in the room + room settings (cards on/off)
+##   client -> host   request_color(name)      switch to a free pawn colour
 ##   host -> all      start(config)            load the match
 ##   client -> host   intent(dict)             a PlayerIntent (host checks the sender's seat)
 ##   host -> each     event(dict)              numbered event (redacted per seat: no peeking at hands)
@@ -17,6 +18,8 @@ extends Node
 ## Messages that arrive before the match scene is ready are buffered.
 
 signal roster_changed(roster: Array)
+## Room settings changed (host's choices, e.g. {"cards": true}).
+signal settings_changed(settings: Dictionary)
 signal joined(seat: int)
 signal connection_failed(reason: String)
 signal disconnected(reason: String)
@@ -34,6 +37,8 @@ var local_name: String = ""
 ## Host: [{seat, name, color_name, peer, token, connected}]. Clients get it without tokens.
 var roster: Array = []
 var match_config: Dictionary = {}
+## Room settings chosen by the host and shown to everyone in the lobby.
+var settings: Dictionary = {"cards": true}
 var in_match: bool = false
 ## Developer: keep the first offered cards instead of showing the draft screen (--bot).
 var auto_draft: bool = false
@@ -49,6 +54,18 @@ var _rng := RandomNumberGenerator.new()
 ## The session under the scene-tree root, if any.
 static func find(tree: SceneTree) -> NetSession:
 	return tree.root.get_node_or_null(NODE_NAME) as NetSession
+
+## What a player typed -> a WebSocket URL: "192.168.1.5:9080" -> "ws://192.168.1.5:9080";
+## a bare host gets the default port; ws:// and wss:// URLs pass through. "" if empty.
+static func address_to_url(address: String) -> String:
+	var text := address.strip_edges()
+	if text == "":
+		return ""
+	if text.begins_with("ws://") or text.begins_with("wss://"):
+		return text
+	if not ":" in text:
+		text += ":%d" % DEFAULT_PORT
+	return "ws://" + text
 
 ## The session under the root, created on first use.
 static func ensure(tree: SceneTree) -> NetSession:
@@ -112,6 +129,7 @@ func leave() -> void:
 	local_seat = -1
 	roster = []
 	in_match = false
+	settings = {"cards": true}
 	_controller = null
 	_pending_events.clear()
 	_pending_private.clear()
@@ -126,6 +144,16 @@ func public_roster() -> Array:
 
 func _new_token() -> String:
 	return "%08x%08x" % [_rng.randi(), _rng.randi()]
+
+## Two players can't share a name: "Ana" becomes "Ana 2", "Ana 3"...
+func _unique_name(wanted: String) -> String:
+	var taken := func(n: String): return roster.any(func(e): return e["name"].to_lower() == n.to_lower())
+	if not taken.call(wanted):
+		return wanted
+	var i := 2
+	while taken.call("%s %d" % [wanted, i]):
+		i += 1
+	return "%s %d" % [wanted, i]
 
 func _free_color() -> String:
 	for color_name in GameConfig.COLORS:
@@ -170,8 +198,45 @@ func _renumber_seats() -> void:
 				_rpc_welcome.rpc_id(roster[i]["peer"], i, roster[i]["token"])
 
 func _broadcast_roster() -> void:
-	_rpc_roster.rpc(public_roster())
+	_rpc_roster.rpc(public_roster(), settings)
 	roster_changed.emit(public_roster())
+
+## The roster entry for the seat this copy plays.
+func local_entry() -> Dictionary:
+	for entry in roster:
+		if entry["seat"] == local_seat:
+			return entry
+	return {}
+
+## Host: change a room setting and tell everyone.
+func set_setting(key: String, value: Variant) -> void:
+	if not is_host():
+		return
+	settings[key] = value
+	settings_changed.emit(settings)
+	_broadcast_roster()
+
+## Switch this player's pawn colour (only to one nobody else has).
+func request_color(color_name: String) -> void:
+	if is_host():
+		_set_color(local_seat, color_name)
+	elif is_online():
+		_rpc_request_color.rpc_id(1, color_name)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_request_color(color_name: String) -> void:
+	if is_host():
+		_set_color(_seat_of_peer(multiplayer.get_remote_sender_id()), color_name)
+
+func _set_color(seat: int, color_name: String) -> void:
+	if in_match or not GameConfig.COLORS.has(color_name):
+		return
+	if roster.any(func(e): return e["seat"] != seat and e["color_name"] == color_name):
+		return # taken
+	for entry in roster:
+		if entry["seat"] == seat:
+			entry["color_name"] = color_name
+	_broadcast_roster()
 
 # --- LOBBY ---
 @rpc("any_peer", "call_remote", "reliable")
@@ -194,6 +259,7 @@ func _rpc_hello(player_name: String, token: String) -> void:
 			"color_name": _free_color(), "token": _new_token()}
 		if entry["name"] == "":
 			entry["name"] = "Player %d" % (entry["seat"] + 1)
+		entry["name"] = _unique_name(entry["name"])
 		roster.append(entry)
 	entry["peer"] = peer_id
 	entry["connected"] = true
@@ -213,17 +279,20 @@ func _rpc_refused(reason: String) -> void:
 	_fail(reason)
 
 @rpc("authority", "call_remote", "reliable")
-func _rpc_roster(list: Array) -> void:
+func _rpc_roster(list: Array, room_settings: Dictionary) -> void:
 	roster = list
+	if room_settings != settings:
+		settings = room_settings
+		settings_changed.emit(settings)
 	roster_changed.emit(roster)
 
 # --- MATCH START ---
-## Host: everyone loads the match with the current roster.
-func start_match(cards_enabled: bool) -> void:
+## Host: everyone loads the match with the current roster and room settings.
+func start_match() -> void:
 	if not is_host() or roster.size() < GameConfig.MIN_PLAYERS:
 		return
 	var players: Array = roster.map(func(entry): return {"name": entry["name"], "color_name": entry["color_name"]})
-	var config := {"players": players, "cards": cards_enabled}
+	var config := {"players": players, "cards": bool(settings.get("cards", true))}
 	_rpc_start.rpc(config)
 	_begin_match(config)
 

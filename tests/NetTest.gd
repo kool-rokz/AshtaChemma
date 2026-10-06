@@ -74,12 +74,26 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	var host: Dictionary = machines[0]
 	_check(host["net"].host("Hana", port) == OK, "host should listen on port %d" % port)
 	for i in range(1, players):
-		_check(machines[i]["net"].join("ws://127.0.0.1:%d" % port, "Guest%d" % i) == OK, "client %d should connect" % i)
+		# Everyone asks for the host's name: the host makes them unique
+		_check(machines[i]["net"].join("ws://127.0.0.1:%d" % port, "Hana") == OK, "client %d should connect" % i)
 	if not await _wait(func(): return host["net"].roster.size() == players and machines.all(func(m): return m["net"].local_seat >= 0), 10.0, "everyone to join"):
 		return _teardown(machines)
 	_check(range(players).all(func(i): return machines[i]["net"].local_seat == i), "seats follow join order")
+	var names: Array = host["net"].roster.map(func(e): return e["name"])
+	_check(names[0] == "Hana" and names[1] == "Hana 2" and (players < 3 or names[2] == "Hana 3"), "duplicate names get a number, got %s" % str(names))
 
-	host["net"].start_match(cards)
+	# Lobby: the host's setting and a client's colour change reach everyone
+	host["net"].set_setting("cards", not cards)
+	host["net"].set_setting("cards", cards)
+	var taken: String = host["net"].roster[0]["color_name"]
+	machines[1]["net"].request_color(taken) # taken by the host: refused
+	machines[1]["net"].request_color("Green") # free with 2-3 players
+	var lobby_synced := func(): return machines.all(func(m): return m["net"].settings.get("cards") == cards \
+		and m["net"].roster.size() == players and m["net"].roster[1]["color_name"] == "Green")
+	await _wait(lobby_synced, 5.0, "lobby settings and colours to reach everyone")
+	_check(host["net"].roster[0]["color_name"] == taken, "a taken colour can't be requested")
+
+	host["net"].start_match()
 	if not await _wait(func(): return machines.all(func(m): return m.has("gm") and m["gm"].current_state == GameManager.GameState.WAITING_FOR_ROLL), 10.0, "every copy to start"):
 		return _teardown(machines)
 

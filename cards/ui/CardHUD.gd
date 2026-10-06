@@ -298,7 +298,8 @@ func _on_turn_changed(_player: int) -> void:
 func _on_play_window_changed(open: bool) -> void:
 	var my_turn := _cm.controller == null or _cm.controller.is_local_turn()
 	if open and my_turn and not _cm.hands[_game.current_player_index].is_empty():
-		_hud.set_hint("Card time: play a card first if you like (Show cards). Throwing the shells ends card play for this turn.")
+		var show_hint := "" if _cm.controller and _cm.controller.local_seat >= 0 else " (Show cards)"
+		_hud.set_hint("Card time: play a card first if you like%s. Throwing the shells ends card play for this turn." % show_hint)
 	_refresh()
 
 func _on_targeting_started(player: int, card: CardData, spec: CardTarget, candidates: Array) -> void:

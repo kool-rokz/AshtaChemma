@@ -68,6 +68,8 @@ func _ready() -> void:
 	for pawn in game.get_all_pawns():
 		pawn.clicked.connect(_on_pawn_clicked)
 	if mode in [Mode.HOST, Mode.CLIENT]:
+		net.roster_changed.connect(_on_roster_changed)
+		net.disconnected.connect(_on_disconnected)
 		net.register_controller(self) # delivers anything that arrived while loading
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -77,6 +79,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if right_click or event.is_action_pressed("ui_cancel"):
 		cancel_card()
 		get_viewport().set_input_as_handled()
+
+func _on_disconnected(reason: String) -> void:
+	game.hud.show_notice(reason)
+
+## Online: mirror who's connected in the players panel.
+func _on_roster_changed(roster: Array) -> void:
+	for entry in roster:
+		game.hud.set_player_connected(int(entry["seat"]), bool(entry["connected"]))
 
 func _cards() -> bool:
 	return card_manager != null
@@ -266,6 +276,8 @@ func run_draft() -> void:
 			while _my_offer.is_empty():
 				await get_tree().process_frame
 			submit(PlayerIntent.draft_picks(local_seat, await _pick(local_seat, _my_offer, false)))
+	if _drafted.size() < game.players.size():
+		game.hud.set_hint("Waiting for the other players to pick their cards...")
 	while _drafted.size() < game.players.size():
 		await get_tree().process_frame
 
