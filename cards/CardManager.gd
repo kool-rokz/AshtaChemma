@@ -10,8 +10,10 @@ extends Node
 ##                       GameManager asks a rule question (GameManager.rules)
 ## It listens to GameManager's signals (turn_changed, roll_result, game_over) to
 ## open the play window and tick modifiers. GameManager never references cards.
+## Drawing (hand, draft, target highlights, modifier markers) is CardHUD's job, from
+## this node's signals.
 ##
-## Unhook: untick "Play with cards" on the start screen (GameConfig.cards_enabled),
+## Unhook: untick "Play with cards" in the lobby (MatchSetup.cards_enabled),
 ## or delete this node from MainGame.tscn.
 
 signal hand_changed(player_id: int)
@@ -22,12 +24,18 @@ signal card_rejected(player_id: int, card: CardData, reason: String)
 ## Waiting for the player to pick `spec` from `candidates`.
 signal targeting_started(player_id: int, card: CardData, spec: CardTarget, candidates: Array)
 signal targeting_cancelled(player_id: int, card: CardData)
+## The current target pick is over (picked, cancelled, or the game ended).
+signal targeting_ended
+## Active modifiers or what they're attached to changed (markers need redrawing).
+signal modifiers_changed
 signal modifier_added(modifier: ActiveModifier)
 signal modifier_expired(modifier: ActiveModifier)
 ## Opens at turn start, closes on the first throw.
 signal play_window_changed(open: bool)
 
 @export var game: GameManager
+## Where the card UI adds its log lines and notes.
+@export var hud: HUD
 @export var rules_config: CardRulesConfig
 ## Skip the draft screens and keep the first offered cards (tests, simulations).
 @export var auto_draft: bool = false
@@ -54,7 +62,7 @@ const HIDDEN_CARD := "?"
 const PUBLIC_VIEW := -2
 
 func _ready() -> void:
-	if not GameConfig.cards_enabled or game == null:
+	if game == null or not game.setup.cards_enabled:
 		queue_free()
 		return
 	if rules_config == null:
@@ -219,7 +227,7 @@ func choose_target(target: Variant) -> bool:
 	if not is_targeting() or not target in _session["candidates"]:
 		return false
 	_session["targets"].append(target)
-	_clear_target_highlights()
+	targeting_ended.emit()
 	_advance_targeting()
 	return true
 
@@ -229,7 +237,7 @@ func cancel_targeting() -> void:
 	var player: int = _session["player"]
 	var card: CardData = _session["card"]
 	_session = {}
-	_clear_target_highlights()
+	targeting_ended.emit()
 	game.end_card_play()
 	targeting_cancelled.emit(player, card)
 
@@ -244,7 +252,6 @@ func _advance_targeting() -> void:
 			continue
 		var candidates := _valid_candidates(card, player, chosen)
 		_session["candidates"] = candidates
-		_show_target_highlights(spec, candidates)
 		targeting_started.emit(player, card, spec, candidates)
 		return
 	_resolve()
@@ -268,7 +275,7 @@ func _resolve() -> void:
 			break
 
 	_session = {}
-	_refresh_markers()
+	modifiers_changed.emit()
 	game.end_card_play()
 	card_resolved.emit(player, card)
 
@@ -349,22 +356,6 @@ func _raw_candidates(spec: CardTarget, player: int) -> Array:
 			result.append(tile)
 	return result
 
-func _show_target_highlights(spec: CardTarget, candidates: Array) -> void:
-	if controller and not controller.is_local_turn():
-		return # only the player picking sees the choices
-	if spec.is_pawn():
-		for pawn in candidates:
-			pawn.set_highlighted(true)
-	elif spec.kind == CardTarget.Kind.TILE:
-		var tiles: Array[int] = []
-		tiles.assign(candidates)
-		game.board.highlighter.set_target_tiles(tiles)
-
-func _clear_target_highlights() -> void:
-	for pawn in game.get_all_pawns():
-		pawn.set_highlighted(false)
-	game.board.highlighter.set_target_tiles([])
-
 ## Target value (Pawn / tile / player) -> network-safe reference, and back.
 func target_to_ref(target: Variant) -> Dictionary:
 	if target is Pawn:
@@ -404,7 +395,7 @@ func add_modifier(data: CardModifier, ctx: CardContext, target_index: int) -> vo
 			active.target_player = target
 	active_modifiers.append(active)
 	modifier_added.emit(active)
-	_refresh_markers()
+	modifiers_changed.emit()
 
 func get_modifiers_for_player(player: int) -> Array[ActiveModifier]:
 	var result: Array[ActiveModifier] = []
@@ -412,22 +403,6 @@ func get_modifiers_for_player(player: int) -> Array[ActiveModifier]:
 		if active.target_player == player or (active.target_player < 0 and active.owner == player):
 			result.append(active)
 	return result
-
-## Rings on affected pawns, tints on affected squares.
-func _refresh_markers() -> void:
-	var pawn_colors := {}
-	var tiles := {}
-	for active in active_modifiers:
-		var color := active.data.marker_color
-		if color.a <= 0.0:
-			continue
-		if active.target_pawn:
-			pawn_colors[active.target_pawn] = color
-		if active.target_tile >= 0:
-			tiles[active.target_tile] = color
-	for pawn in game.get_all_pawns():
-		pawn.set_status_color(pawn_colors.get(pawn, Color(0, 0, 0, 0)))
-	game.board.highlighter.set_marked_tiles(tiles)
 
 # --- GAME EVENTS ---
 ## A player's turn starts: their modifiers count down, and their play window opens.
@@ -438,7 +413,7 @@ func _on_turn_changed(player: int) -> void:
 			if active.turns_left <= 0:
 				active_modifiers.erase(active)
 				modifier_expired.emit(active)
-	_refresh_markers()
+	modifiers_changed.emit()
 	_played_this_turn = 0
 	_window_open = true
 	play_window_changed.emit(true)
@@ -452,7 +427,7 @@ func _on_game_over(_winner: int) -> void:
 	_window_open = false
 	if is_targeting():
 		_session = {}
-		_clear_target_highlights()
+		targeting_ended.emit()
 	play_window_changed.emit(false)
 
 # --- SNAPSHOT (rejoin, autosave, desync checks) ---
@@ -483,7 +458,7 @@ func to_snapshot(viewer: int = -1) -> Dictionary:
 
 func load_snapshot(snap: Dictionary) -> void:
 	_session = {}
-	_clear_target_highlights()
+	targeting_ended.emit()
 	var saved_hands: Array = snap["hands"]
 	for player in saved_hands.size():
 		hands[player] = Array(saved_hands[player]).map(func(id): return null if String(id) == HIDDEN_CARD else find_card(StringName(id)))
@@ -503,7 +478,7 @@ func load_snapshot(snap: Dictionary) -> void:
 		active.target_tile = int(m["target_tile"])
 		active.turns_left = int(m["turns_left"])
 		active_modifiers.append(active)
-	_refresh_markers()
+	modifiers_changed.emit()
 	for player in hands.size():
 		hand_changed.emit(player)
 	play_window_changed.emit(_window_open)

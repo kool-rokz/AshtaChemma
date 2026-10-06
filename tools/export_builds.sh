@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the itch.io web zip and the Windows zip into build/.
-#   bash tools/export_builds.sh
+#   bash tools/export_builds.sh                 (into build/)
+#   BUILD_DIR=build/v0.4.0 bash tools/export_builds.sh   (elsewhere, e.g. while the old exe runs)
 # Exports from a clean copy of the project (no editor-only add-ons such as the MCP
 # tools), so the shipped game never contains them. Needs Godot 4.7.2 export templates
 # (Editor > Manage Export Templates).
@@ -8,7 +9,7 @@ set -euo pipefail
 
 GODOT="${GODOT:-/c/Program Files (x86)/Steam/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/build"
+OUT="$(cd "$ROOT" && mkdir -p "${BUILD_DIR:-build}" && cd "${BUILD_DIR:-build}" && pwd)"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 

@@ -1,7 +1,6 @@
 class_name Pawn
 extends Area2D
 
-signal movement_finished
 signal hovered(pawn: Pawn)
 signal unhovered(pawn: Pawn)
 signal clicked(pawn: Pawn)
@@ -15,7 +14,7 @@ signal clicked(pawn: Pawn)
 ## The logical index of the square this pawn currently occupies (0-24).
 var current_tile_index: int = -1
 
-## True while this pawn is a legal choice for the current roll.
+## Pulsing ring: a choice for this screen's player (a legal move, or a card target).
 var is_highlighted: bool = false
 
 ## White so it reads against every team colour (including green).
@@ -77,11 +76,6 @@ func set_team(new_team_id: int, color: Color) -> void:
 		sprite.modulate = color
 
 
-func place_at(position_vec: Vector2, tile_index: int) -> void:
-	global_position = position_vec
-	current_tile_index = tile_index
-
-
 func move_along_path(path_coordinates: Array[Vector2]) -> void:
 	if path_coordinates.is_empty():
 		return
@@ -101,7 +95,6 @@ func move_along_path(path_coordinates: Array[Vector2]) -> void:
 	
 	# Block the caller until the whole sequence is done
 	await tween.finished
-	movement_finished.emit()
 
 # Clicks are only reported; MatchController decides what they mean (move or card target)
 func _on_input_event(_viewport, event, _shape_idx) -> void:

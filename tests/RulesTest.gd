@@ -34,8 +34,8 @@ func _new_game(throws: Array[int]) -> void:
 	if gm:
 		gm.get_parent().queue_free()
 		await get_tree().process_frame
-	GameConfig.players = GameConfig.default_players(2)
 	var main: Node = load(GAME_SCENE_PATH).instantiate()
+	MatchSetup.make(GameConfig.default_players(2)).apply_to(main)
 	gm = main.get_node("GameManager")
 	gm.cowry_thrower = ScriptedCowryThrower.new(throws)
 	add_child(main)

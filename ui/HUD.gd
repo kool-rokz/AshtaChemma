@@ -1,8 +1,9 @@
 class_name HUD
 extends CanvasLayer
 
-## Match UI: players panel (left), turn/throw/log panel (right), winner overlay.
-## Listens to GameManager signals and turns them into plain-language messages.
+## Match UI: players panel (left), turn/throw/log panel (right), winner overlay, and
+## (through its BoardPresenter) the board highlights. Listens to GameManager signals
+## and turns them into plain-language messages; never changes game state.
 
 const START_SCREEN_PATH := "res://ui/StartScreen.tscn"
 const PANEL_WIDTH := 360.0
@@ -11,9 +12,17 @@ const MAX_LOG_LINES := 60
 ## A throw chip was clicked (index into the pool); MatchController turns it into an intent.
 signal throw_chip_pressed(index: int)
 
+## The match this HUD shows (binds once its players exist).
+@export var game: GameManager
+
 var roll_button: Button
+## Online: the seat this screen plays (set by MatchController). -1 = offline, every seat local.
+var local_seat: int = -1
+var presenter: BoardPresenter
 
 var _gm: GameManager
+## A notice or the winner screen covers the match: no more throwing.
+var _closed: bool = false
 var _turn_label: Label
 var _hint_label: Label
 var _shells_view: ShellsView
@@ -38,19 +47,30 @@ const GLOW_FADE_TIME := 0.6
 const OVERLAY_LAYER := 20
 
 func _init() -> void:
-	# Built here (not in _ready) so GameManager can grab roll_button in its own _ready.
+	# Built here (not in _ready) so other nodes can connect to roll_button in their _ready.
 	_build_turn_glow() # first, so it draws behind the panels
 	_build_right_panel()
 	_build_winner_overlay()
+	roll_button.disabled = true
 
-## Called by GameManager once players exist.
+func _ready() -> void:
+	if game:
+		game.setup_done.connect(bind.bind(game))
+
+## Once the match's players exist.
 func bind(gm: GameManager) -> void:
 	_gm = gm
 	_build_players_panel()
+	presenter = BoardPresenter.new()
+	presenter.name = "BoardPresenter"
+	add_child(presenter)
+	presenter.bind(gm, self)
+	presenter.preview_changed.connect(_on_move_preview_changed)
+	gm.state_changed.connect(_on_state_changed)
 	gm.turn_changed.connect(_on_turn_changed)
 	gm.shells_thrown.connect(func(shells: Array[bool]): _shells_view.shells = shells)
 	gm.roll_result.connect(_on_roll_result)
-	gm.valid_moves_highlighted.connect(_on_moves_available)
+	gm.movable_pawns_changed.connect(_on_moves_available)
 	gm.throw_pool_changed.connect(_on_throw_pool_changed)
 	gm.throws_exhausted.connect(_on_throws_exhausted)
 	gm.turn_forfeited.connect(_on_turn_forfeited)
@@ -62,7 +82,6 @@ func bind(gm: GameManager) -> void:
 	gm.inner_ring_unlocked.connect(_on_inner_ring_unlocked)
 	gm.pawn_reached_home.connect(_on_pawn_reached_home)
 	gm.bonus_turn.connect(_on_bonus_turn)
-	gm.move_preview_changed.connect(_on_move_preview_changed)
 	gm.game_over.connect(_on_game_over)
 	gm.snapshot_loaded.connect(func(): _on_turn_changed(gm.current_player_index))
 	gm.board.tile_hovered.connect(_on_tile_hovered)
@@ -269,10 +288,18 @@ func show_notice(text: String) -> void:
 	_winner_label.text = text
 	_winner_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.97))
 	_winner_overlay.visible = true
+	_closed = true
 	roll_button.disabled = true
 
+func set_local_seat(seat: int) -> void:
+	local_seat = seat
+
+## Is it this screen's turn to act (always true offline)?
+func is_local_turn() -> bool:
+	return local_seat < 0 or local_seat == _gm.current_player_index
+
 func _online() -> bool:
-	return _gm.local_seat >= 0
+	return local_seat >= 0
 
 ## Text for players watching someone else's turn.
 func _waiting(what: String) -> String:
@@ -312,18 +339,22 @@ func _refresh_players() -> void:
 		_player_rows[i]["status"].text = "Home %d/%d · %s" % [_gm.count_pawns_home(i), GameConfig.PAWNS_PER_PLAYER, unlocked]
 		var is_turn := i == _gm.current_player_index
 		var tags := ""
-		if _online() and i == _gm.local_seat:
+		if _online() and i == local_seat:
 			tags += "  (you)"
 		if _disconnected.has(i):
 			tags += "  (disconnected)"
 		_player_rows[i]["name"].text = ("▸ " if is_turn else "") + _gm.get_player_name(i) + tags
 
 # --- SIGNAL HANDLERS ---
+func _on_state_changed(state: GameManager.GameState) -> void:
+	roll_button.disabled = _closed or state != GameManager.GameState.WAITING_FOR_ROLL \
+		or not is_local_turn() or _gm.is_game_finished()
+
 func _on_turn_changed(player_id: int) -> void:
-	var mine := _online() and _gm.is_local_turn()
+	var mine := _online() and is_local_turn()
 	_turn_label.text = "Your turn" if mine else "%s's turn" % _gm.get_player_name(player_id)
 	_turn_label.add_theme_color_override("font_color", _gm.get_player_color(player_id))
-	_hint_label.text = "Throw the shells." if _gm.is_local_turn() else _waiting("is about to throw...")
+	_hint_label.text = "Throw the shells." if is_local_turn() else _waiting("is about to throw...")
 	roll_button.text = "Throw shells"
 	# The previous player's throw would read as this player's, so start blank
 	_shells_view.shells = []
@@ -340,13 +371,15 @@ func _on_roll_result(value: int) -> void:
 	if value in GameManager.BONUS_THROWS and _gm.throw_pool.size() < GameManager.MAX_BONUS_CHAIN:
 		roll_button.text = "Throw again"
 		var term_name := "Chamma" if value == 4 else "Ashta"
-		if _gm.is_local_turn():
+		if is_local_turn():
 			_hint_label.text = "%s! Throw again before moving. (Three 4/8s in a row forfeits the turn.)" % term_name
 		else:
 			_hint_label.text = _waiting("threw a %s and throws again..." % term_name.to_lower())
 
 func _on_moves_available(pawns: Array[Pawn]) -> void:
-	if not _gm.is_local_turn():
+	if pawns.is_empty():
+		return
+	if not is_local_turn():
 		_hint_label.text = _waiting("is choosing a move (throw of %d)..." % _gm.current_roll)
 		return
 	_hint_label.text = "Using a throw of %d: pick a highlighted pawn (%d can move). Click another throw to switch; hover a pawn to preview." % [_gm.current_roll, pawns.size()]
@@ -362,7 +395,7 @@ func _on_throw_pool_changed(pool: Array[int], exhausted: Array[int], selected: i
 		chip.text = str(pool[i])
 		chip.custom_minimum_size = Vector2(38, 34)
 		chip.add_theme_font_size_override("font_size", 18)
-		var usable := choosing and _gm.is_local_turn() and _gm.can_use_throw(pool[i])
+		var usable := choosing and is_local_turn() and _gm.can_use_throw(pool[i])
 		chip.disabled = not usable
 		chip.tooltip_text = "Use this throw" if usable else "No pawn can use this throw right now"
 		if i == selected and choosing:
@@ -438,7 +471,7 @@ func _on_pawn_reached_home(pawn: Pawn, pawns_home: int) -> void:
 
 func _on_bonus_turn(player_id: int, reason: String) -> void:
 	roll_button.text = "Throw again"
-	_hint_label.text = "Extra throw (%s)." % reason if _gm.is_local_turn() else _waiting("gets an extra throw (%s)..." % reason)
+	_hint_label.text = "Extra throw (%s)." % reason if is_local_turn() else _waiting("gets an extra throw (%s)..." % reason)
 	_log_line("%s gets an extra throw (%s)." % [_who(player_id), reason])
 
 func _on_move_preview_changed(info: Dictionary) -> void:
@@ -448,11 +481,11 @@ func _on_move_preview_changed(info: Dictionary) -> void:
 	var tiles: Array[int] = info["tiles"]
 	var text := "Moves %d → %s" % [tiles.size(), _describe_tile(tiles.back())]
 	match info["end"]:
-		TileHighlighter.PreviewEnd.CAPTURE:
+		GameManager.MoveEnd.CAPTURE:
 			text += "\n[color=#ff6b6b][b]Captures %s's pawn![/b][/color]" % _gm.get_player_name(info["victim"].team_id)
-		TileHighlighter.PreviewEnd.SAFE:
+		GameManager.MoveEnd.SAFE:
 			text += "\n[color=#4fd1d9]Lands on a safe house.[/color]"
-		TileHighlighter.PreviewEnd.HOME:
+		GameManager.MoveEnd.HOME:
 			text += "\n[color=#b18cff]Reaches home![/color]"
 	_preview_label.text = text
 
@@ -479,4 +512,5 @@ func _on_game_over(winner_id: int) -> void:
 	_winner_label.text = "%s wins!" % _gm.get_player_name(winner_id)
 	_winner_label.add_theme_color_override("font_color", _gm.get_player_color(winner_id))
 	_winner_overlay.visible = true
+	_closed = true
 	roll_button.disabled = true

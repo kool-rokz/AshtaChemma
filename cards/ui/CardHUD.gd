@@ -2,7 +2,8 @@ class_name CardHUD
 extends CanvasLayer
 
 ## Card UI, created by CardManager: the hand strip under the board, the private
-## draft screens with "pass to" covers, and card lines in the main HUD log.
+## draft screens with "pass to" covers, card lines in the main HUD log, and on the
+## board the target choices and the rings/tints of lasting effects.
 ## Hands stay face-down until their owner clicks "Show cards", and hide again every turn.
 
 const HAND_POS := Vector2(390, 540)
@@ -38,7 +39,7 @@ func _init() -> void:
 func bind(manager: CardManager) -> void:
 	_cm = manager
 	_game = manager.game
-	_hud = _game.hud
+	_hud = manager.hud
 	_build_hand_panel()
 	_build_overlay()
 
@@ -46,6 +47,8 @@ func bind(manager: CardManager) -> void:
 	_cm.play_window_changed.connect(_on_play_window_changed)
 	_cm.targeting_started.connect(_on_targeting_started)
 	_cm.targeting_cancelled.connect(_on_targeting_cancelled)
+	_cm.targeting_ended.connect(_clear_target_highlights)
+	_cm.modifiers_changed.connect(_draw_modifier_markers)
 	_cm.card_played.connect(_on_card_played)
 	_cm.card_resolved.connect(_on_card_resolved)
 	_cm.card_rejected.connect(_on_card_rejected)
@@ -279,17 +282,6 @@ func run_draft(player: int, offer: Array, keep: int, with_cover: bool = true) ->
 	_overlay.visible = false
 	return result
 
-## Pick the first cards of the open draft screen (used by tests driving the real UI).
-func debug_pick_first(count: int) -> void:
-	var grid: GridContainer = null
-	for child in _overlay_box.get_children():
-		if child is GridContainer:
-			grid = child
-	if grid == null:
-		return
-	for i in mini(count, grid.get_child_count()):
-		(grid.get_child(i) as Button).button_pressed = true
-
 # --- EVENTS ---
 func _on_turn_changed(_player: int) -> void:
 	_revealed = false
@@ -303,6 +295,7 @@ func _on_play_window_changed(open: bool) -> void:
 	_refresh()
 
 func _on_targeting_started(player: int, card: CardData, spec: CardTarget, candidates: Array) -> void:
+	_show_target_highlights(spec, candidates)
 	if _cm.controller and not _cm.controller.is_local_turn():
 		_hud.set_hint("%s is playing a card..." % _game.get_player_name(player)) # revealed once played
 	else:
@@ -342,6 +335,39 @@ func _on_modifier_expired(active: ActiveModifier) -> void:
 	var what := active.data.label if active.data.label != "" else active.card.title
 	_hud.log_message("%s's [b]%s[/b] wore off (%s)." % [_hud.who(active.owner), active.card.title, what])
 	_refresh_player_notes()
+
+# --- BOARD MARKS ---
+func _show_target_highlights(spec: CardTarget, candidates: Array) -> void:
+	if _cm.controller and not _cm.controller.is_local_turn():
+		return # only the player picking sees the choices
+	if spec.is_pawn():
+		for pawn in candidates:
+			pawn.set_highlighted(true)
+	elif spec.kind == CardTarget.Kind.TILE:
+		var tiles: Array[int] = []
+		tiles.assign(candidates)
+		_game.board.highlighter.set_target_tiles(tiles)
+
+func _clear_target_highlights() -> void:
+	for pawn in _game.get_all_pawns():
+		pawn.set_highlighted(false)
+	_game.board.highlighter.set_target_tiles([])
+
+## Rings on affected pawns, tints on affected squares.
+func _draw_modifier_markers() -> void:
+	var pawn_colors := {}
+	var tiles := {}
+	for active in _cm.active_modifiers:
+		var color := active.data.marker_color
+		if color.a <= 0.0:
+			continue
+		if active.target_pawn:
+			pawn_colors[active.target_pawn] = color
+		if active.target_tile >= 0:
+			tiles[active.target_tile] = color
+	for pawn in _game.get_all_pawns():
+		pawn.set_status_color(pawn_colors.get(pawn, Color(0, 0, 0, 0)))
+	_game.board.highlighter.set_marked_tiles(tiles)
 
 # --- WIDGETS ---
 func _label(text: String, font_size: int, color: Color = TEXT_COLOR) -> Label:

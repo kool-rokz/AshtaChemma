@@ -6,8 +6,9 @@ extends Node
 ## multiplayer, so the transport is swappable: WebSocket today, WebRTC later.
 ##
 ## Host (peer 1) is the authority and plays seat 0. Messages:
-##   client -> host   hello(name, token, ver)  join (ver = GameConfig.PROTOCOL_VERSION)
+##   client -> host   hello(name, token, ver)  join, or rejoin with the token (ver = GameConfig.PROTOCOL_VERSION)
 ##   host -> client   welcome(seat, token)     your seat + reconnect token
+##   host -> client   sync(config, snapshot)   rejoining a running match: load it from this state
 ##   host -> all      roster(list, settings)   who's in the room + room settings (cards on/off)
 ##   client -> host   request_color(name)      switch to a free pawn colour
 ##   host -> all      start(config)            load the match
@@ -16,6 +17,11 @@ extends Node
 ##   host -> one      private(dict)            e.g. your draft offer
 ##   host -> one      rejected(intent, reason)
 ## Messages that arrive before the match scene is ready are buffered.
+## Mid-match, a client that loses the host reconnects by itself; the host holds its
+## seat, sends a snapshot once the game is between actions, then events as usual.
+## Version check across builds: Godot numbers a node's RPCs by method name in sorted
+## order, so _rpc_hello and _rpc_refused must keep their slots for an old build to be
+## told "version doesn't match". Don't add RPCs whose names sort before _rpc_refused.
 ## Transport: only _open_server() / _open_client() know it's WebSocket; everything else
 ## uses Godot's MultiplayerAPI, so WebRTC (or anything else) is a swap of those two.
 
@@ -25,7 +31,6 @@ signal settings_changed(settings: Dictionary)
 signal joined(seat: int)
 signal connection_failed(reason: String)
 signal disconnected(reason: String)
-signal match_starting(config: Dictionary)
 signal intent_rejected(intent: Dictionary, reason: String)
 ## Host: room code progress ("Getting a room code..."), the code itself, or why there isn't one.
 signal room_status(text: String)
@@ -34,6 +39,8 @@ signal room_code_ready(code: String, live: bool)
 signal room_code_failed(reason: String)
 ## Client: a join attempt failed and is being retried (new room codes take a moment to go live).
 signal join_retrying(attempt: int)
+## Client, mid-match: the connection dropped; trying to get back in.
+signal reconnecting(attempt: int)
 
 enum Role { NONE, HOST, CLIENT }
 
@@ -45,18 +52,23 @@ const JOIN_RETRY_DELAY := 3.0
 ## Godot's default (3 s) is too short for a first connection through a new tunnel
 ## (TLS + Cloudflare routing) or slow Wi-Fi.
 const HANDSHAKE_TIMEOUT := 15.0
+## Mid-match reconnects before giving up (with the host's ABSENT_TURN_GRACE in mind).
+const RECONNECT_ATTEMPTS := 5
+const RECONNECT_DELAY := 3.0
 const DEFAULT_SETTINGS := {"cards": true}
 
 var role: Role = Role.NONE
 var local_seat: int = -1
 var local_name: String = ""
-## Host: [{seat, name, color_name, peer, token, connected}]. Clients get it without tokens.
+## Host: [{seat, name, color_name, peer, token, connected, syncing}]. Clients get
+## {seat, name, color_name, connected}; a rejoining player counts as connected once synced.
 var roster: Array = []
 var match_config: Dictionary = {}
 ## Room settings chosen by the host and shown to everyone in the lobby.
 var settings: Dictionary = DEFAULT_SETTINGS.duplicate()
 var in_match: bool = false
-## How the match scene is loaded once the host starts (tests load it in place).
+## How the match is loaded once it starts or is rejoined: func(setup: MatchSetup).
+## Default: MatchSetup.launch() replaces the current scene; tests load it in place.
 var scene_loader: Callable
 
 var _controller: MatchController
@@ -66,6 +78,7 @@ var _token: String = ""
 var _tunnel: Tunnel
 var _join_url: String = ""
 var _join_attempt: int = 0
+var _reconnect_attempt: int = 0
 ## Bumped by join()/leave(), so a pending retry from an abandoned join never fires.
 var _join_generation: int = 0
 ## Host: the current room code ("" until the tunnel is open).
@@ -96,6 +109,19 @@ static func address_to_url(address: String) -> String:
 		text += ":%d" % DEFAULT_PORT
 	return "ws://" + text
 
+## The address inside pasted text: a whole invite ("Join my game! Room code: x-y-z")
+## or a link ("...index.html?room=x-y-z") gives the room code; anything else is kept.
+static func find_address(text: String) -> String:
+	var t := text.strip_edges()
+	if " " in t or "room=" in t:
+		for word in t.replace("
+", " ").replace("	", " ").split(" ", false):
+			var candidate: String = word.get_slice("room=", 1) if "room=" in word else word
+			candidate = candidate.get_slice("&", 0).trim_prefix("(").trim_suffix(")").trim_suffix(",").trim_suffix(".")
+			if Tunnel.is_room_code(candidate):
+				return candidate
+	return t
+
 ## The session under the root, created on first use.
 static func ensure(tree: SceneTree) -> NetSession:
 	var session := find(tree)
@@ -107,7 +133,6 @@ static func ensure(tree: SceneTree) -> NetSession:
 
 func _ready() -> void:
 	_rng.randomize()
-	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)
@@ -175,6 +200,9 @@ func _open_client(url: String) -> Error:
 	return OK
 
 func _on_connection_failed() -> void:
+	if role == Role.CLIENT and in_match:
+		_try_reconnect()
+		return
 	if role == Role.CLIENT and local_seat < 0 and _join_attempt < JOIN_ATTEMPTS:
 		_join_attempt += 1
 		join_retrying.emit(_join_attempt)
@@ -213,6 +241,7 @@ func leave() -> void:
 		_tunnel.close()
 	room_code = ""
 	_join_generation += 1
+	_reconnect_attempt = 0
 	role = Role.NONE
 	local_seat = -1
 	roster = []
@@ -228,7 +257,17 @@ func get_token() -> String:
 ## Roster without secrets, as sent to clients.
 func public_roster() -> Array:
 	return roster.map(func(entry): return {"seat": entry["seat"], "name": entry["name"],
-		"color_name": entry["color_name"], "connected": entry["connected"]})
+		"color_name": entry["color_name"], "connected": _is_present(entry)})
+
+## Host: is this seat's player here and up to date (connected, not still rejoining)?
+func is_seat_present(seat: int) -> bool:
+	for entry in roster:
+		if entry["seat"] == seat:
+			return _is_present(entry)
+	return false
+
+func _is_present(entry: Dictionary) -> bool:
+	return entry["connected"] and not entry.get("syncing", false)
 
 func _new_token() -> String:
 	return "%08x%08x" % [_rng.randi(), _rng.randi()]
@@ -249,8 +288,12 @@ func _free_color() -> String:
 			return color_name
 	return GameConfig.COLORS.keys()[0]
 
+## Ends the session: in the lobby the menu shows `reason`, in a match the HUD does.
 func _fail(reason: String) -> void:
-	connection_failed.emit(reason)
+	if in_match:
+		disconnected.emit(reason)
+	else:
+		connection_failed.emit(reason)
 	leave()
 
 # --- CONNECTION EVENTS ---
@@ -258,11 +301,25 @@ func _on_connected_to_server() -> void:
 	_rpc_hello.rpc_id(1, local_name, _token, GameConfig.PROTOCOL_VERSION)
 
 func _on_server_disconnected() -> void:
+	if role == Role.CLIENT and in_match:
+		_try_reconnect() # a dropped connection, or the host left: only trying tells
+		return
 	disconnected.emit("The host left.")
 	leave()
 
-func _on_peer_connected(_peer_id: int) -> void:
-	pass # wait for hello
+## Client, mid-match: reconnect with our token; the host answers with a sync.
+func _try_reconnect() -> void:
+	if _reconnect_attempt >= RECONNECT_ATTEMPTS:
+		_fail("Lost the connection to the host (they may have left the game).")
+		return
+	_reconnect_attempt += 1
+	reconnecting.emit(_reconnect_attempt)
+	var generation := _join_generation
+	await get_tree().create_timer(RECONNECT_DELAY).timeout
+	if generation != _join_generation or role != Role.CLIENT:
+		return
+	if _open_client(_join_url) != OK:
+		_try_reconnect()
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	if not is_host():
@@ -270,6 +327,7 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	for entry in roster.duplicate():
 		if entry["peer"] == peer_id:
 			entry["connected"] = false
+			entry["syncing"] = false
 			entry["peer"] = 0
 			if not in_match:
 				roster.erase(entry) # seats are only held once the match has started
@@ -345,9 +403,12 @@ func _rpc_hello(player_name: String, token: String, protocol: int) -> void:
 		if token != "" and existing["token"] == token:
 			entry = existing # reclaiming a seat
 	if in_match:
-		# Rejoining a running match needs a state sync (phase 5); until then, refuse cleanly
-		_rpc_refused.rpc_id(peer_id, "This match is already in progress." if entry.is_empty() \
-			else "Rejoining a match in progress isn't supported yet.")
+		if entry.is_empty():
+			_rpc_refused.rpc_id(peer_id, "This match is already in progress.")
+		elif entry["connected"]:
+			_rpc_refused.rpc_id(peer_id, "That seat is already being played.")
+		else:
+			_rejoin(entry, peer_id)
 		return
 	if entry.is_empty():
 		if roster.size() >= GameConfig.MAX_PLAYERS:
@@ -363,6 +424,30 @@ func _rpc_hello(player_name: String, token: String, protocol: int) -> void:
 	entry["connected"] = true
 	_rpc_welcome.rpc_id(peer_id, entry["seat"], entry["token"])
 	_broadcast_roster()
+
+## Host: a player is back mid-match. Their seat is held (others see them as away)
+## until the game is between actions; then they get a snapshot and, after it, events.
+func _rejoin(entry: Dictionary, peer_id: int) -> void:
+	entry["peer"] = peer_id
+	entry["connected"] = true
+	entry["syncing"] = true
+	_rpc_welcome.rpc_id(peer_id, entry["seat"], entry["token"])
+	while _controller == null or not _controller.can_snapshot():
+		await get_tree().process_frame
+		if entry["peer"] != peer_id or not in_match:
+			return # dropped again, or the match ended
+	_rpc_sync.rpc_id(peer_id, match_config, _controller.get_snapshot(entry["seat"]))
+	entry["syncing"] = false
+	_broadcast_roster()
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_sync(config: Dictionary, snapshot: Dictionary) -> void:
+	_reconnect_attempt = 0
+	# Everything from the old match scene is replaced by the snapshot
+	_controller = null
+	_pending_events.clear()
+	_pending_private.clear()
+	_begin_match(config, snapshot)
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_welcome(seat: int, token: String) -> void:
@@ -396,19 +481,16 @@ func start_match() -> void:
 func _rpc_start(config: Dictionary) -> void:
 	_begin_match(config)
 
-func _begin_match(config: Dictionary) -> void:
+## resume: a rejoining client's snapshot ({} = a new match).
+func _begin_match(config: Dictionary, resume: Dictionary = {}) -> void:
 	match_config = config
 	in_match = true
-	var players: Array[Dictionary] = []
-	for p in config["players"]:
-		players.append({"name": p["name"], "color_name": p["color_name"]})
-	GameConfig.players = players
-	GameConfig.cards_enabled = bool(config["cards"])
-	match_starting.emit(config)
+	var setup := MatchSetup.make(config["players"], bool(config["cards"]))
+	setup.resume = resume
 	if scene_loader.is_valid():
-		scene_loader.call(config)
+		scene_loader.call(setup)
 	else:
-		get_tree().change_scene_to_file("res://MainGame.tscn")
+		setup.launch(get_tree())
 
 ## Called by the match's MatchController once it's ready; flushes buffered messages.
 func register_controller(controller: MatchController) -> void:
@@ -438,7 +520,7 @@ func _rpc_intent(intent: Dictionary) -> void:
 ## Host: send each connected client its own view of a new event.
 func broadcast_event(event: Dictionary) -> void:
 	for entry in roster:
-		if entry["seat"] != local_seat and entry["connected"]:
+		if entry["seat"] != local_seat and _is_present(entry):
 			_rpc_event.rpc_id(entry["peer"], _controller.event_for_seat(event, entry["seat"]))
 
 @rpc("authority", "call_remote", "reliable")

@@ -5,10 +5,16 @@ extends Node
 ## Checks: joining and seats, out-of-turn intents rejected by the host, clients
 ## can't see other players' cards, and every copy stays in sync through a full
 ## bot-played match (turn-start fingerprints and final state).
+## With 3+ players, mid-match: one player leaves (the host plays for them) and rejoins
+## from the menu with its token; another loses its connection and reconnects by itself.
+## Both resume from the host's snapshot and must end in the same state.
 ## Run: godot --headless --path . --time-scale 30 res://tests/NetTest.tscn
 
 const GAME_SCENE_PATH = "res://MainGame.tscn"
 const MAX_ACTIONS := 4000
+## Bot actions after which the rejoin checks start (3+ player runs).
+const LEAVE_AT_ACTION := 40
+const DROP_AT_ACTION := 100
 
 var failures := 0
 var _bot := RandomNumberGenerator.new()
@@ -38,11 +44,18 @@ func _make_machine(label: String, seed_value: int) -> Dictionary:
 	net.name = NetSession.NODE_NAME
 	root.add_child(net)
 	var machine := {"label": label, "root": root, "net": net, "seed": seed_value, "hashes": []}
-	net.scene_loader = func(_config): _load_match(machine)
+	net.scene_loader = func(setup: MatchSetup): _load_match(machine, setup)
 	return machine
 
-func _load_match(machine: Dictionary) -> void:
+func _load_match(machine: Dictionary, setup: MatchSetup) -> void:
+	if machine.has("main") and is_instance_valid(machine["main"]):
+		machine["main"].queue_free() # rejoining: the snapshot replaces the old copy
+	if not setup.resume.is_empty():
+		machine["resumed"] = true
+		machine["hashes"] = []
 	var main: Node = load(GAME_SCENE_PATH).instantiate()
+	setup.apply_to(main)
+	machine["main"] = main
 	main.get_node("GameManager").rng_seed = machine["seed"]
 	var cm: CardManager = main.get_node("CardManager")
 	cm.auto_draft = true
@@ -114,9 +127,26 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	# Full match: whoever's turn it is acts on their own copy, once it has caught up
 	var actions := 0
 	var host_gm: GameManager = host["gm"]
+	var host_net: NetSession = host["net"]
+	var url := "ws://127.0.0.1:%d" % port
+	var leaver_token := ""
+	var stand_ins_at_leave := 0
 	while not host_gm.is_game_finished() and actions < MAX_ACTIONS:
 		await get_tree().create_timer(0.05).timeout
-		var actor: Dictionary = machines[host_gm.current_player_index]
+		if players >= 3:
+			if actions == LEAVE_AT_ACTION and leaver_token == "":
+				leaver_token = machines[2]["net"].get_token()
+				machines[2]["net"].leave() # closes the game / tab
+				stand_ins_at_leave = host["ctrl"].stand_in_actions
+			elif leaver_token != "" and not machines[2].has("resumed") and machines[2]["net"].role == NetSession.Role.NONE 					and host["ctrl"].stand_in_actions >= stand_ins_at_leave + 3:
+				machines[2]["net"].join(url, "Hana", leaver_token) # back from the menu, same token
+			if actions == DROP_AT_ACTION and not machines[1].has("dropped"):
+				machines[1]["dropped"] = true
+				host_net.multiplayer.multiplayer_peer.disconnect_peer(host_net.roster[1]["peer"])
+		var seat := host_gm.current_player_index
+		if not host_net.is_seat_present(seat):
+			continue # away: the host plays for them
+		var actor: Dictionary = machines[seat]
 		var caught_up: bool = actor["ctrl"].applied_seq == host["ctrl"].next_seq - 1
 		if caught_up and (actor["gm"].is_settled() or actor["gm"].current_state == GameManager.GameState.PLAYING_CARD):
 			actions += 1
@@ -124,11 +154,23 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	_check(host_gm.is_game_finished(), "match should finish")
 	await _wait(func(): return machines.all(func(m): return m["ctrl"].applied_seq == host["ctrl"].applied_seq and m["gm"].is_game_finished()), 10.0, "clients to apply the last events")
 
+	if players >= 3:
+		_check(host["ctrl"].stand_in_actions > stand_ins_at_leave, "the host played for the player who left")
+		_check(machines[2].has("resumed"), "the player who left rejoined with its token")
+		_check(machines[1].has("resumed"), "the dropped player reconnected by itself")
 	var final_hash: String = host["ctrl"].get_state_hash()
 	for m in machines:
 		_check(m["ctrl"].get_state_hash() == final_hash, "%s final state differs" % m["label"])
-		_check(m["hashes"] == host["hashes"], "%s turn-start fingerprints differ (%d vs %d turns)" % [m["label"], m["hashes"].size(), host["hashes"].size()])
-	print("   %d events, %d turns, %d bot actions, final %s" % [host["ctrl"].applied_seq + 1, host["hashes"].size(), actions, final_hash])
+		var host_hashes: Array = host["hashes"]
+		if m.has("resumed"):
+			# Rejoined: its turns since the rejoin must be the host's latest ones
+			var tail := host_hashes.slice(host_hashes.size() - m["hashes"].size())
+			_check(not m["hashes"].is_empty() and m["hashes"] == tail, "%s turn-start fingerprints after rejoining differ" % m["label"])
+		else:
+			_check(m["hashes"] == host_hashes, "%s turn-start fingerprints differ (%d vs %d turns)" % [m["label"], m["hashes"].size(), host_hashes.size()])
+	var rejoined: Array = machines.filter(func(m): return m.has("resumed")).map(func(m): return m["label"])
+	print("   %d events, %d turns, %d bot actions, %d stand-in actions, rejoined %s, final %s" % [
+		host["ctrl"].applied_seq + 1, host["hashes"].size(), actions, host["ctrl"].stand_in_actions, str(rejoined), final_hash])
 	await _teardown(machines)
 
 func _teardown(machines: Array) -> void:

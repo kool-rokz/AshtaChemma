@@ -13,6 +13,9 @@ extends Node
 ## REPLICA: applies events fed to it and decides nothing (sync tests).
 ## Randomness lives only on the authority: draft offers here, throws via
 ## GameManager.generate_shells(). Everything else is deterministic.
+## Dropped players: the host keeps their seat, plays for them after a grace period
+## (simple legal moves, never cards), and a returning player resumes from a snapshot
+## (GameManager.setup.resume).
 
 ## Authority: a new event exists (broadcast this to the other copies).
 signal event_created(event: Dictionary)
@@ -23,6 +26,7 @@ signal intent_rejected(intent: PlayerIntent, reason: String)
 enum Mode { OFFLINE, HOST, CLIENT, REPLICA }
 
 @export var game: GameManager
+@export var hud: HUD
 ## Optional: freed when cards are off.
 @export var card_manager: CardManager
 @export var mode: Mode = Mode.OFFLINE
@@ -49,6 +53,20 @@ var _last_pick_msec: int = -1000
 const PICK_ECHO_MSEC := 150
 ## Game seconds an event may wait for this copy to be ready (animations, turn pause).
 const READY_TIMEOUT := 30.0
+## Host: game seconds a dropped player has to come back before the host plays their
+## turns for them (the draft is shorter: it holds everyone up).
+const ABSENT_TURN_GRACE := 20.0
+const ABSENT_DRAFT_GRACE := 10.0
+## Host: game seconds between stand-in actions, so the others can follow them.
+const STAND_IN_PACE := 1.0
+
+## Host: actions played for absent players (stats, tests).
+var stand_in_actions: int = 0
+## Host: seat -> game seconds since that player dropped.
+var _away_time: Dictionary = {}
+## Host: seats already announced as stood-in for during their current absence.
+var _stood_in: Dictionary = {}
+var _stand_in_cooldown: float = 0.0
 
 func _ready() -> void:
 	if net == null:
@@ -56,21 +74,34 @@ func _ready() -> void:
 	if net and net.is_online():
 		mode = Mode.HOST if net.is_host() else Mode.CLIENT
 		local_seat = net.local_seat
-		game.local_seat = local_seat
-	if card_manager and (card_manager.is_queued_for_deletion() or not GameConfig.cards_enabled):
+	hud.set_local_seat(local_seat)
+	if card_manager and (card_manager.is_queued_for_deletion() or not game.setup.cards_enabled):
 		card_manager = null
+	var resume := game.setup.resume
 	if card_manager:
 		card_manager.controller = self
-		game.pre_game_tasks.append(run_draft)
-	game.roll_button.pressed.connect(throw_shells)
-	game.hud.throw_chip_pressed.connect(select_throw)
+		if resume.is_empty():
+			game.pre_game_tasks.append(run_draft)
+	hud.roll_button.pressed.connect(throw_shells)
+	hud.throw_chip_pressed.connect(select_throw)
 	game.board.tile_clicked.connect(_on_tile_clicked)
 	for pawn in game.get_all_pawns():
 		pawn.clicked.connect(_on_pawn_clicked)
+	set_process(mode == Mode.HOST)
 	if mode in [Mode.HOST, Mode.CLIENT]:
 		net.roster_changed.connect(_on_roster_changed)
 		net.disconnected.connect(_on_disconnected)
+		net.reconnecting.connect(_on_reconnecting)
+	if not resume.is_empty():
+		_resume.call_deferred(resume) # once every node in the match is ready
+	elif mode in [Mode.HOST, Mode.CLIENT]:
 		net.register_controller(self) # delivers anything that arrived while loading
+
+## Rejoin: continue from the host's snapshot, then apply what happened since.
+func _resume(snap: Dictionary) -> void:
+	load_snapshot(snap)
+	if mode in [Mode.HOST, Mode.CLIENT]:
+		net.register_controller(self)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _cards() or not card_manager.is_targeting():
@@ -81,18 +112,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _on_disconnected(reason: String) -> void:
-	game.hud.show_notice(reason)
+	hud.show_notice(reason)
+
+func _on_reconnecting(attempt: int) -> void:
+	hud.set_hint("Connection lost. Reconnecting (%d of %d)..." % [attempt, NetSession.RECONNECT_ATTEMPTS])
+	if attempt == 1:
+		hud.log_message("[color=#f0a54a]Connection to the host lost, reconnecting...[/color]")
 
 ## Online: mirror who's connected in the players panel.
 func _on_roster_changed(roster: Array) -> void:
 	for entry in roster:
-		game.hud.set_player_connected(int(entry["seat"]), bool(entry["connected"]))
+		hud.set_player_connected(int(entry["seat"]), bool(entry["connected"]))
 
 func _cards() -> bool:
 	return card_manager != null
-
-func is_authority() -> bool:
-	return mode == Mode.OFFLINE or mode == Mode.HOST
 
 ## The seat this copy acts for: its own online, whoever's turn it is offline.
 func acting_seat() -> int:
@@ -279,7 +312,7 @@ func run_draft() -> void:
 				await get_tree().process_frame
 			submit(PlayerIntent.draft_picks(local_seat, await _pick(local_seat, _my_offer, false)))
 	if _drafted.size() < game.players.size():
-		game.hud.set_hint("Waiting for the other players to pick their cards...")
+		hud.set_hint("Waiting for the other players to pick their cards...")
 	while _drafted.size() < game.players.size():
 		await get_tree().process_frame
 
@@ -291,6 +324,48 @@ func _pick(player: int, offer: Array, with_cover: bool) -> Array:
 	else:
 		picks = await card_manager.pick_cards_on_screen(player, offer, with_cover)
 	return picks.map(func(c): return c.id)
+
+# --- HOST: STAND-IN FOR ABSENT PLAYERS ---
+func _process(delta: float) -> void:
+	for seat in game.players.size():
+		if seat == local_seat or net.is_seat_present(seat):
+			_away_time.erase(seat)
+			_stood_in.erase(seat)
+		else:
+			_away_time[seat] = _away_time.get(seat, 0.0) + delta
+	_stand_in_cooldown -= delta
+	if _away_time.is_empty() or _stand_in_cooldown > 0.0 or not _queue.is_empty() or game.is_game_finished():
+		return
+	var intent := _stand_in_intent()
+	if intent:
+		_stand_in_cooldown = STAND_IN_PACE
+		if not _stood_in.has(intent.player):
+			_stood_in[intent.player] = true
+			hud.log_message("Playing for %s while they're away." % hud.who(intent.player))
+		stand_in_actions += 1
+		submit_remote(intent, intent.player)
+
+## The next action to play for an absent seat, or null if none is due.
+func _stand_in_intent() -> PlayerIntent:
+	# Draft: keep the first offered cards
+	for seat in _away_time:
+		if _offers.has(seat) and not _drafted.has(seat) and _away_time[seat] >= ABSENT_DRAFT_GRACE:
+			var keep := card_manager.get_keep_count(_offers[seat].size())
+			return PlayerIntent.draft_picks(seat, _offers[seat].slice(0, keep).map(func(c): return c.id))
+	var seat := game.current_player_index
+	if not _away_time.has(seat) or _away_time[seat] < ABSENT_TURN_GRACE:
+		return null
+	match game.current_state:
+		GameManager.GameState.WAITING_FOR_ROLL:
+			return PlayerIntent.throw_shells(seat)
+		GameManager.GameState.SELECTING_PIECE:
+			var movable := game.get_movable_pawns(game.current_roll)
+			if not movable.is_empty():
+				return PlayerIntent.move_pawn(seat, game.get_pawn_ref(movable[0]))
+		GameManager.GameState.PLAYING_CARD:
+			if _cards() and card_manager.is_targeting():
+				return PlayerIntent.cancel_card(seat) # they dropped mid-card
+	return null
 
 # --- EVERY COPY: apply events in order ---
 ## Feed an event from the authority (replicas, and later the network).
@@ -366,7 +441,11 @@ func _execute(intent: PlayerIntent, event: Dictionary) -> void:
 			_drafted[intent.player] = true
 
 # --- SNAPSHOT ---
-## Whole match state (game + cards + event number). Take it while game.is_settled().
+## Is now a moment a snapshot is complete (nothing animating or waiting to apply)?
+func can_snapshot() -> bool:
+	return _queue.is_empty() and (game.is_settled() or game.is_game_finished())
+
+## Whole match state (game + cards + event number). Take it when can_snapshot().
 ## viewer: -1 = everything this copy knows; a seat = hide the other seats' hands;
 ## CardManager.PUBLIC_VIEW = hide every hand.
 func get_snapshot(viewer: int = -1) -> Dictionary:

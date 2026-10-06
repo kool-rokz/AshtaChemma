@@ -39,13 +39,15 @@ func _check(condition: bool, message: String) -> void:
 		print("  FAIL: ", message)
 
 # --- harness ---
+func _roll_button() -> Button:
+	return (gm.get_parent().get_node("HUD") as HUD).roll_button
+
 func _new_game(throws: Array[int], hand_ids: Array = [], cards_on := true) -> void:
 	if gm:
 		gm.get_parent().queue_free()
 		await get_tree().process_frame
-	GameConfig.players = GameConfig.default_players(2)
-	GameConfig.cards_enabled = cards_on
 	var main: Node = load(GAME_SCENE_PATH).instantiate()
+	MatchSetup.make(GameConfig.default_players(2), cards_on).apply_to(main)
 	gm = main.get_node("GameManager")
 	gm.cowry_thrower = ScriptedCowryThrower.new(throws)
 	cm = main.get_node("CardManager")
@@ -220,9 +222,9 @@ func _scenario_cancel_keeps_card() -> void:
 	print("scenario: cancelling a target pick keeps the card and the turn")
 	await _new_game([], [&"sprint"])
 	_check(cm.request_play(0) and cm.is_targeting(), "targeting started")
-	_check(gm.current_state == GameManager.GameState.PLAYING_CARD and gm.roll_button.disabled, "throw locked while picking")
+	_check(gm.current_state == GameManager.GameState.PLAYING_CARD and _roll_button().disabled, "throw locked while picking")
 	cm.cancel_targeting()
-	_check(gm.current_state == GameManager.GameState.WAITING_FOR_ROLL and not gm.roll_button.disabled, "back to waiting")
+	_check(gm.current_state == GameManager.GameState.WAITING_FOR_ROLL and not _roll_button().disabled, "back to waiting")
 	_check(cm.hands[0].size() == 1 and cm.can_play_now(), "card still in hand and playable")
 
 func _scenario_card_move_wins() -> void:
@@ -255,4 +257,3 @@ func _scenario_cards_off_removes_system() -> void:
 	_check(not is_instance_valid(cm) or cm.is_queued_for_deletion(), "CardManager removed")
 	_check(not gm.rules is ModifierHooks and not gm.board.rules is ModifierHooks, "default rule hooks")
 	_check(gm.current_state == GameManager.GameState.WAITING_FOR_ROLL, "game starts normally")
-	GameConfig.cards_enabled = false

@@ -7,26 +7,28 @@
 [ext_resource type="Resource" path="res://cards/CardRules.tres" id="6_rules"]
 [ext_resource type="Script" path="res://match/MatchController.gd" id="7_match"]
 
-[node name="Node2D" type="Node2D" unique_id=1938848503]
+[node name="MainGame" type="Node2D" unique_id=1938848503]
 
 [node name="Board" parent="." unique_id=2108668019 instance=ExtResource("3_8qpgq")]
 position = Vector2(470, 207)
 
 [node name="Players" type="Node2D" parent="." unique_id=1021531624]
 
-[node name="HUD" parent="." unique_id=1885675672 instance=ExtResource("4_hud")]
+[node name="HUD" parent="." unique_id=1885675672 node_paths=PackedStringArray("game") instance=ExtResource("4_hud")]
+game = NodePath("../GameManager")
 
-[node name="GameManager" parent="." unique_id=869072643 node_paths=PackedStringArray("board", "hud", "pawns_root") instance=ExtResource("3_bqqt8")]
+[node name="GameManager" parent="." unique_id=869072643 node_paths=PackedStringArray("board", "pawns_root") instance=ExtResource("3_bqqt8")]
 board = NodePath("../Board")
-hud = NodePath("../HUD")
 pawns_root = NodePath("../Players")
 
-[node name="CardManager" type="Node" parent="." node_paths=PackedStringArray("game")]
+[node name="CardManager" type="Node" parent="." node_paths=PackedStringArray("game", "hud")]
 script = ExtResource("5_cards")
 game = NodePath("../GameManager")
+hud = NodePath("../HUD")
 rules_config = ExtResource("6_rules")
 
-[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "card_manager")]
+[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "hud", "card_manager")]
 script = ExtResource("7_match")
 game = NodePath("../GameManager")
+hud = NodePath("../HUD")
 card_manager = NodePath("../CardManager")

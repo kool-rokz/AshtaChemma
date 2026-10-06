@@ -5,16 +5,14 @@ extends Node2D
 ## player's pulses), safe-square crosses, the active player's inner-ring entry arrow,
 ## the tile under the mouse, and a numbered preview of a pending move.
 
-enum PreviewEnd { NORMAL, SAFE, CAPTURE, HOME }
-
 const SAFE_MARK_COLOR := Color(0.25, 0.25, 0.3, 0.55)
 const HOVER_COLOR := Color(1, 1, 1, 0.8)
 const PATH_COLOR := Color(1.0, 0.82, 0.25, 0.35)
 const END_COLORS := {
-	PreviewEnd.NORMAL: Color(1.0, 0.75, 0.1, 0.6),
-	PreviewEnd.SAFE: Color(0.15, 0.75, 0.8, 0.6),
-	PreviewEnd.CAPTURE: Color(0.95, 0.15, 0.15, 0.7),
-	PreviewEnd.HOME: Color(0.6, 0.35, 0.95, 0.6),
+	GameManager.MoveEnd.NORMAL: Color(1.0, 0.75, 0.1, 0.6),
+	GameManager.MoveEnd.SAFE: Color(0.15, 0.75, 0.8, 0.6),
+	GameManager.MoveEnd.CAPTURE: Color(0.95, 0.15, 0.15, 0.7),
+	GameManager.MoveEnd.HOME: Color(0.6, 0.35, 0.95, 0.6),
 }
 
 var board: Board
@@ -28,7 +26,7 @@ var hovered_tile: int = -1:
 const LOCKED_ARROW_COLOR := Color(0.35, 0.35, 0.4, 0.75)
 
 var _preview_tiles: Array[int] = []
-var _preview_end: PreviewEnd = PreviewEnd.NORMAL
+var _preview_end: GameManager.MoveEnd = GameManager.MoveEnd.NORMAL
 ## [{"tile": int, "color": Color}] per player.
 var _homebases: Array[Dictionary] = []
 var _active_homebase: int = -1
@@ -62,7 +60,7 @@ func set_active_player(homebase: int, arrow_from: int, arrow_to: int, color: Col
 	queue_redraw()
 
 ## Tiles in travel order; the last one is the destination.
-func show_move_preview(tiles: Array[int], end: PreviewEnd) -> void:
+func show_move_preview(tiles: Array[int], end: GameManager.MoveEnd) -> void:
 	_preview_tiles = tiles
 	_preview_end = end
 	queue_redraw()

@@ -1,13 +1,12 @@
 extends Control
 
 ## Main menu (the game's first screen): pick your name, then Host a game or Join one.
-## Both lead to the lobby: players and their colours, the host's card setting, and
-## the host's Start button. Online only; the match itself is MainGame.tscn.
+## Both lead to the lobby (LobbyView). Online only; the match itself is MainGame.tscn.
+## Rejoining: the last room's seat token is saved, so joining the same room again
+## mid-match puts you back in your seat.
 ## Developer command-line options (--host, --join, --bot...): see net/DevFlags.gd.
 
 const SETTINGS_PATH := "user://settings.cfg"
-const MUTED := Color(0.7, 0.7, 0.75)
-const ERROR_COLOR := Color(0.95, 0.45, 0.4)
 
 enum Screen { HOME, JOIN, CONNECTING, LOBBY }
 
@@ -16,21 +15,17 @@ var _content: VBoxContainer
 var _net: NetSession
 var _settings := ConfigFile.new()
 var _name_edit: LineEdit
-var _error: Label
+var _address_edit: LineEdit
+var _lobby: LobbyView
 var _autostart: int = 0
 var _host_port: int = NetSession.DEFAULT_PORT
+## The server URL being joined (to save its seat token once welcomed).
+var _join_url: String = ""
 ## --no-tunnel (DevFlags): host on the local network only, no room code.
 var _no_tunnel: bool = false
-
-# Lobby widgets (rebuilt on roster changes)
-var _players_box: VBoxContainer
-var _swatches_box: HBoxContainer
-var _cards_toggle: CheckBox
-var _start_button: Button
-var _lobby_status: Label
-var _room_code_label: Label
-var _room_status: Label
-var _copy_button: Button
+## Web: kept alive while JavaScript may call them.
+var _web_paste_callback: JavaScriptObject
+var _web_clipboard_callbacks: Array[JavaScriptObject] = []
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -55,6 +50,7 @@ func _ready() -> void:
 	panel.add_child(_content)
 
 	_settings.load(SETTINGS_PATH)
+	_hook_web_paste()
 	# The session lives under the root (survives scene changes); add it once the root is free
 	_setup.call_deferred()
 
@@ -62,15 +58,10 @@ func _setup() -> void:
 	_net = NetSession.ensure(get_tree())
 	_net.leave() # coming back from a match: start clean
 	# Method callables (not lambdas) so the connections end when this screen is freed
-	_net.roster_changed.connect(_on_roster_changed)
-	_net.settings_changed.connect(_on_settings_changed)
 	_net.joined.connect(_on_joined)
 	_net.connection_failed.connect(_on_join_failed)
 	_net.disconnected.connect(_show_home)
 	_net.join_retrying.connect(_on_join_retrying)
-	_net.room_status.connect(_on_room_status)
-	_net.room_code_ready.connect(_on_room_code_ready)
-	_net.room_code_failed.connect(_on_room_code_failed)
 	if _apply_dev_flags():
 		return
 	# Web invite links: .../index.html?room=brave-lemon-kite-maple opens Join with the code filled in
@@ -81,13 +72,11 @@ func _setup() -> void:
 	else:
 		_show_home()
 
-func _on_roster_changed(_roster: Array) -> void:
-	_refresh_lobby()
-
-func _on_settings_changed(_settings_now: Dictionary) -> void:
-	_refresh_lobby()
-
 func _on_joined(_seat: int) -> void:
+	# Remember this seat: joining the same room again (e.g. after a reload) reclaims it
+	_settings.set_value("session", "url", _join_url)
+	_settings.set_value("session", "token", _net.get_token())
+	_settings.save(SETTINGS_PATH)
 	_show_lobby()
 
 func _on_join_failed(reason: String) -> void:
@@ -97,31 +86,6 @@ func _on_join_retrying(attempt: int) -> void:
 	if _screen == Screen.CONNECTING:
 		_show_connecting(_settings.get_value("player", "last_address", ""), "Not answering yet, trying again (%d of %d)..." % [attempt, NetSession.JOIN_ATTEMPTS])
 
-func _on_room_status(text: String) -> void:
-	if _screen == Screen.LOBBY and _room_status and is_instance_valid(_room_status):
-		_room_status.text = text
-
-func _on_room_code_ready(code: String, live: bool) -> void:
-	if _screen == Screen.LOBBY and _room_code_label and is_instance_valid(_room_code_label):
-		_room_code_label.text = code
-		_room_status.text = "Share this code. Friends pick Join a game and type it in (PC or browser)." if live \
-			else "Cloudflare is slow to confirm this code; it may take a minute before friends can join."
-		_copy_button.visible = true
-
-func _on_room_code_failed(reason: String) -> void:
-	if _screen == Screen.LOBBY and _room_code_label and is_instance_valid(_room_code_label):
-		_room_code_label.text = "No room code"
-		_room_status.text = reason + " Friends on your network can still use the address below."
-
-## Copies the code, plus the game's web page if one is set (GameConfig.PLAY_URL).
-func _copy_invite() -> void:
-	var code := _net.room_code
-	var text := "Join my Ashta Chemma game! Room code: %s" % code
-	if GameConfig.PLAY_URL != "":
-		text = "Join my Ashta Chemma game: %s  (Join a game, room code: %s)" % [GameConfig.PLAY_URL, code]
-	DisplayServer.clipboard_set(text)
-	_room_status.text = "Copied! Paste it to your friends."
-
 ## Web builds: the room code from the page address, if the invite link carried one.
 func _room_from_page_url() -> String:
 	if not OS.has_feature("web"):
@@ -129,64 +93,111 @@ func _room_from_page_url() -> String:
 	var room: Variant = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('room') || ''")
 	return str(room).strip_edges() if room != null else ""
 
+# --- PASTE ---
+## Browsers don't let Godot read the clipboard on Ctrl+V, but they do hand the text
+## to a "paste" event: put it into whichever text field has focus.
+func _hook_web_paste() -> void:
+	if not OS.has_feature("web"):
+		return
+	_web_paste_callback = JavaScriptBridge.create_callback(_on_web_paste)
+	JavaScriptBridge.get_interface("window").addEventListener("paste", _web_paste_callback)
+
+func _on_web_paste(args: Array) -> void:
+	var data: Variant = args[0].clipboardData
+	if data != null:
+		_paste_into_focus(str(data.getData("text")))
+
+## Web: let the browser's paste event do the pasting (Godot's own Ctrl+V would paste
+## its internal clipboard, which is usually empty or stale there).
+func _input(event: InputEvent) -> void:
+	if OS.has_feature("web") and event is InputEventKey and event.pressed \
+			and event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed) \
+			and get_viewport().gui_get_focus_owner() is LineEdit:
+		get_viewport().set_input_as_handled()
+
+func _paste_into_focus(text: String) -> void:
+	var edit := get_viewport().gui_get_focus_owner() as LineEdit
+	if edit and text != "":
+		edit.insert_text_at_caret(text.strip_edges())
+
+## The Paste button next to the address field (also for phones, which have no Ctrl+V).
+func _paste_address() -> void:
+	if not OS.has_feature("web"):
+		_address_edit.text = DisplayServer.clipboard_get().strip_edges()
+		return
+	var clipboard: Variant = JavaScriptBridge.get_interface("navigator").clipboard
+	if clipboard == null:
+		_show_join("This browser can't paste from a button. Click the box and press Ctrl+V.")
+		return
+	var on_text := JavaScriptBridge.create_callback(func(args: Array):
+		if _address_edit and is_instance_valid(_address_edit):
+			_address_edit.text = str(args[0]).strip_edges())
+	var on_error := JavaScriptBridge.create_callback(func(_args: Array):
+		_show_join("The browser didn't allow pasting. Click the box and press Ctrl+V."))
+	_web_clipboard_callbacks = [on_text, on_error]
+	clipboard.readText().then(on_text, on_error)
+
 # --- SCREENS ---
 func _clear() -> void:
 	for child in _content.get_children():
 		child.queue_free()
-	_players_box = null
+	_lobby = null
+	_address_edit = null
 
 func _show_home(error: String = "") -> void:
 	_clear()
 	_screen = Screen.HOME
-	_content.add_child(_label("Ashta Chemma", 44))
-	_content.add_child(_label("Online with friends", 18, MUTED))
+	_content.add_child(MenuWidgets.label("Ashta Chemma", 44))
+	_content.add_child(MenuWidgets.label("Online with friends", 18, MenuWidgets.MUTED))
 
-	_content.add_child(_label("Your name", 16, MUTED, HORIZONTAL_ALIGNMENT_LEFT))
-	_name_edit = LineEdit.new()
+	_content.add_child(MenuWidgets.label("Your name", 16, MenuWidgets.MUTED, HORIZONTAL_ALIGNMENT_LEFT))
+	_name_edit = MenuWidgets.line_edit(_settings.get_value("player", "name", ""), "Player")
 	_name_edit.name = "PlayerName"
 	_name_edit.max_length = GameConfig.NAME_MAX_LENGTH
-	_name_edit.placeholder_text = "Player"
-	_name_edit.text = _settings.get_value("player", "name", "")
-	_name_edit.custom_minimum_size = Vector2(0, 44)
-	_name_edit.add_theme_font_size_override("font_size", 18)
 	_content.add_child(_name_edit)
 
-	var host := _button("Host a game")
+	var host := MenuWidgets.button("Host a game")
 	host.name = "HostGame"
 	host.pressed.connect(_host)
 	# Browsers can't accept connections, so only desktop builds can host
 	host.visible = not OS.has_feature("web")
 	_content.add_child(host)
-	var join := _button("Join a game")
+	var join := MenuWidgets.button("Join a game")
 	join.name = "JoinGame"
 	join.pressed.connect(_show_join)
 	_content.add_child(join)
 	_add_error(error)
-	_content.add_child(_label("v" + GameConfig.GAME_VERSION, 12, Color(0.45, 0.45, 0.5)))
+	_content.add_child(MenuWidgets.label("v" + GameConfig.GAME_VERSION, 12, Color(0.45, 0.45, 0.5)))
 
 func _show_join(error: String = "") -> void:
 	_remember_name()
 	_clear()
 	_screen = Screen.JOIN
-	_content.add_child(_label("Join a game", 32))
-	_content.add_child(_label("Type the room code the host gave you (or an address like 192.168.1.23:9080 on the same network).", 15, MUTED))
-	var address := LineEdit.new()
-	address.name = "JoinAddress"
-	address.placeholder_text = "room code, e.g. brave-lemon-kite-maple"
-	address.text = _settings.get_value("player", "last_address", "")
-	address.custom_minimum_size = Vector2(0, 44)
-	address.add_theme_font_size_override("font_size", 18)
-	_content.add_child(address)
+	_content.add_child(MenuWidgets.label("Join a game", 32))
+	_content.add_child(MenuWidgets.label("Type or paste the room code the host gave you (or an address like 192.168.1.23:9080 on the same network).", 15, MenuWidgets.MUTED))
+	var address_row := HBoxContainer.new()
+	address_row.add_theme_constant_override("separation", 8)
+	_address_edit = MenuWidgets.line_edit(_settings.get_value("player", "last_address", ""), "room code, e.g. brave-lemon-kite-maple")
+	_address_edit.name = "JoinAddress"
+	_address_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_address_edit.text_submitted.connect(_join)
+	address_row.add_child(_address_edit)
+	var paste := MenuWidgets.button("Paste", Vector2(96, 44))
+	paste.name = "PasteAddress"
+	paste.focus_mode = Control.FOCUS_NONE # keep the caret in the box
+	paste.pressed.connect(_paste_address)
+	address_row.add_child(paste)
+	_content.add_child(address_row)
+
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 12)
-	var back := _button("Back", Vector2(140, 48))
+	var back := MenuWidgets.button("Back", Vector2(140, 48))
 	back.pressed.connect(func(): _show_home())
 	actions.add_child(back)
-	var go := _button("Join")
+	var go := MenuWidgets.button("Join")
 	go.name = "JoinConfirm"
 	go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	go.pressed.connect(func(): _join(address.text))
-	address.text_submitted.connect(func(text): _join(text))
+	go.pressed.connect(func(): _join(_address_edit.text))
 	actions.add_child(go)
 	_content.add_child(actions)
 	_add_error(error)
@@ -194,11 +205,11 @@ func _show_join(error: String = "") -> void:
 func _show_connecting(where: String, note: String = "") -> void:
 	_clear()
 	_screen = Screen.CONNECTING
-	_content.add_child(_label("Connecting...", 28))
-	_content.add_child(_label(where, 15, MUTED))
+	_content.add_child(MenuWidgets.label("Connecting...", 28))
+	_content.add_child(MenuWidgets.label(where, 15, MenuWidgets.MUTED))
 	if note != "":
-		_content.add_child(_label(note, 15, MUTED))
-	var cancel := _button("Cancel", Vector2(160, 48))
+		_content.add_child(MenuWidgets.label(note, 15, MenuWidgets.MUTED))
+	var cancel := MenuWidgets.button("Cancel", Vector2(160, 48))
 	cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	cancel.pressed.connect(func():
 		_net.leave()
@@ -208,120 +219,12 @@ func _show_connecting(where: String, note: String = "") -> void:
 func _show_lobby() -> void:
 	_clear()
 	_screen = Screen.LOBBY
-	_content.add_child(_label("Lobby", 32))
-	if _net.is_host():
-		_content.add_child(_label("Room code", 15, MUTED))
-		_room_code_label = _label(_net.room_code if _net.room_code != "" else "...", 30, Color(1.0, 0.85, 0.4))
-		_room_code_label.name = "RoomCode"
-		_content.add_child(_room_code_label)
-		_room_status = _label("Getting a room code...", 14, MUTED)
-		_content.add_child(_room_status)
-		_copy_button = _button("Copy invite", Vector2(220, 40))
-		_copy_button.name = "CopyInvite"
-		_copy_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		_copy_button.visible = _net.room_code != ""
-		_copy_button.pressed.connect(_copy_invite)
-		_content.add_child(_copy_button)
-		var addresses := _label("Same network: " + ", ".join(_lan_addresses()), 13, MUTED)
-		addresses.name = "HostAddresses"
-		_content.add_child(addresses)
-
-	_players_box = VBoxContainer.new()
-	_players_box.add_theme_constant_override("separation", 8)
-	_content.add_child(_players_box)
-
-	_content.add_child(_label("Your colour", 15, MUTED, HORIZONTAL_ALIGNMENT_LEFT))
-	_swatches_box = HBoxContainer.new()
-	_swatches_box.add_theme_constant_override("separation", 12)
-	_content.add_child(_swatches_box)
-
-	_cards_toggle = CheckBox.new()
-	_cards_toggle.name = "PlayWithCards"
-	_cards_toggle.text = "Play with cards"
-	_cards_toggle.add_theme_font_size_override("font_size", 18)
-	_cards_toggle.disabled = not _net.is_host()
-	_cards_toggle.toggled.connect(func(on): _net.set_setting("cards", on))
-	_content.add_child(_cards_toggle)
-
-	_lobby_status = _label("", 15, MUTED)
-	_content.add_child(_lobby_status)
-
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 12)
-	var leave := _button("Leave", Vector2(140, 48))
-	leave.pressed.connect(func():
+	_lobby = LobbyView.new(_net, _host_port, _autostart)
+	_autostart = 0
+	_lobby.left.connect(func():
 		_net.leave()
 		_show_home())
-	actions.add_child(leave)
-	_start_button = _button("Start game")
-	_start_button.name = "StartGame"
-	_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_start_button.visible = _net.is_host()
-	_start_button.pressed.connect(_net.start_match)
-	actions.add_child(_start_button)
-	_content.add_child(actions)
-	_refresh_lobby()
-
-func _refresh_lobby() -> void:
-	if _players_box == null or not is_instance_valid(_players_box):
-		return
-	for child in _players_box.get_children():
-		child.queue_free()
-	for entry in _net.roster:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		var swatch := ColorRect.new()
-		swatch.color = GameConfig.COLORS.get(entry["color_name"], Color.WHITE)
-		swatch.custom_minimum_size = Vector2(22, 22)
-		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row.add_child(swatch)
-		var tags: Array[String] = []
-		if entry["seat"] == 0:
-			tags.append("host")
-		if entry["seat"] == _net.local_seat:
-			tags.append("you")
-		if not entry["connected"]:
-			tags.append("disconnected")
-		var text: String = entry["name"] + ("  (%s)" % ", ".join(tags) if not tags.is_empty() else "")
-		var name_label := _label(text, 18, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT)
-		# Wrapping labels have no minimum width; let the name take the row
-		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(name_label)
-		_players_box.add_child(row)
-
-	# Colour swatches: yours outlined, other players' colours unavailable
-	for child in _swatches_box.get_children():
-		child.queue_free()
-	var mine: String = _net.local_entry().get("color_name", "")
-	for color_name in GameConfig.COLORS:
-		var taken: bool = _net.roster.any(func(e): return e["color_name"] == color_name and e["seat"] != _net.local_seat)
-		var button := Button.new()
-		button.name = "Color" + color_name
-		button.tooltip_text = color_name + (" (taken)" if taken else "")
-		button.custom_minimum_size = Vector2(44, 44)
-		button.disabled = taken
-		button.pressed.connect(_net.request_color.bind(color_name))
-		for state in ["normal", "hover", "pressed", "focus", "disabled"]:
-			var style := StyleBoxFlat.new()
-			style.bg_color = GameConfig.COLORS[color_name]
-			if color_name != mine:
-				style.bg_color = style.bg_color.darkened(0.75 if taken else (0.25 if state == "hover" else 0.45))
-			style.set_corner_radius_all(22)
-			style.set_border_width_all(4 if color_name == mine else 0)
-			style.border_color = Color.WHITE
-			button.add_theme_stylebox_override(state, style)
-		_swatches_box.add_child(button)
-
-	_cards_toggle.set_pressed_no_signal(bool(_net.settings.get("cards", true)))
-	var count := _net.roster.size()
-	if _net.is_host():
-		_start_button.disabled = count < GameConfig.MIN_PLAYERS
-		_lobby_status.text = "Waiting for players (2-4)." if count < GameConfig.MIN_PLAYERS else "%d players in. Start when everyone's here." % count
-		if _autostart > 0 and count >= _autostart:
-			_autostart = 0
-			_net.start_match()
-	else:
-		_lobby_status.text = "Waiting for the host to start..."
+	_content.add_child(_lobby)
 
 # --- ACTIONS ---
 func _player_name() -> String:
@@ -341,33 +244,27 @@ func _host(port: int = NetSession.DEFAULT_PORT) -> void:
 		_show_home("Couldn't host on port %d (%s). Is another game already hosting?" % [port, error_string(err)])
 		return
 	_show_lobby()
-	if not _no_tunnel:
-		_net.open_room_code(port)
+	if _no_tunnel:
+		_lobby.show_no_room_code("Room code off (--no-tunnel).")
 	else:
-		_on_room_code_failed("Room code off (--no-tunnel).")
+		_net.open_room_code(port)
 
-func _join(address: String) -> void:
+func _join(typed: String) -> void:
+	var address := NetSession.find_address(typed)
 	var url := NetSession.address_to_url(address)
 	if url == "":
 		_show_join("Type the address the host gave you.")
 		return
-	_settings.set_value("player", "last_address", address.strip_edges())
+	_settings.set_value("player", "last_address", address)
 	_settings.save(SETTINGS_PATH)
-	var err := _net.join(url, _settings.get_value("player", "name", "Player"))
+	_join_url = url
+	# Same room as last time: offer our old seat's token (only used if a match is running)
+	var token: String = _settings.get_value("session", "token", "") if _settings.get_value("session", "url", "") == url else ""
+	var err := _net.join(url, _settings.get_value("player", "name", "Player"), token)
 	if err != OK:
 		_show_join("Couldn't connect (%s)." % error_string(err))
 		return
-	_show_connecting(address.strip_edges())
-
-## This PC's addresses on the local network, for friends on the same Wi-Fi.
-func _lan_addresses() -> Array[String]:
-	var result: Array[String] = []
-	for ip in IP.get_local_addresses():
-		if ip.count(".") == 3 and not ip.begins_with("127.") and not ip.begins_with("169.254."):
-			result.append("%s:%d" % [ip, _host_port])
-	if result.is_empty():
-		result.append("127.0.0.1:%d (this PC only)" % _host_port)
-	return result
+	_show_connecting(address)
 
 ## Developer command-line options (DevFlags; debug builds only). Returns true if used.
 func _apply_dev_flags() -> bool:
@@ -389,24 +286,7 @@ func _apply_dev_flags() -> bool:
 		_join(opts["--join"])
 	return true
 
-# --- WIDGETS ---
-func _label(text: String, font_size: int, color: Color = Color(0.92, 0.92, 0.95), align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", font_size)
-	label.add_theme_color_override("font_color", color)
-	label.horizontal_alignment = align
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	return label
-
-func _button(text: String, min_size := Vector2(0, 52)) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.custom_minimum_size = min_size
-	button.add_theme_font_size_override("font_size", 20)
-	return button
-
 func _add_error(text: String) -> void:
-	_error = _label(text, 15, ERROR_COLOR)
-	_error.visible = text != ""
-	_content.add_child(_error)
+	var error := MenuWidgets.label(text, 15, MenuWidgets.ERROR)
+	error.visible = text != ""
+	_content.add_child(error)

@@ -1,8 +1,8 @@
 class_name GameConfig
 extends RefCounted
 
-## Match setup handed from the start screen to MainGame.
-## Static so it survives change_scene_to_file() without an autoload.
+## Fixed game constants and helpers. Per-match choices (players, cards) live in
+## MatchSetup, handed to each match explicitly.
 
 const MIN_PLAYERS := 2
 const MAX_PLAYERS := 4
@@ -10,10 +10,10 @@ const PAWNS_PER_PLAYER := 4
 const NAME_MAX_LENGTH := 16
 
 ## Shown in the menu. Bump when shipping a build.
-const GAME_VERSION := "0.3.0"
+const GAME_VERSION := "0.4.0"
 ## Bump whenever online messages or game rules change in a way older builds would
 ## misread: the host refuses players whose build speaks a different protocol.
-const PROTOCOL_VERSION := 1
+const PROTOCOL_VERSION := 2
 
 ## Pawn colour choices, in default assignment order.
 const COLORS: Dictionary = {
@@ -31,20 +31,9 @@ const SEATS_BY_PLAYER_COUNT: Dictionary = {
 	4: [0, 1, 2, 3],
 }
 
-## One entry per player: {"name": String, "color_name": String}. Empty = use defaults.
-static var players: Array[Dictionary] = []
-
 ## Where friends can play in a browser (e.g. your itch.io page). Added to copied invites;
 ## leave "" to share just the room code.
 const PLAY_URL := ""
-
-## Experimental card layer (cards/CardManager). false = the plain game, exactly as before.
-static var cards_enabled: bool = false
-
-static func get_players() -> Array[Dictionary]:
-	if players.size() >= MIN_PLAYERS:
-		return players
-	return default_players(MIN_PLAYERS)
 
 static func default_players(count: int) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []

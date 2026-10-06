@@ -1,7 +1,10 @@
-# game_manager/GameManager.gd
-
 class_name GameManager
 extends Node
+
+## The rules and the single writer of game state: pawns, the throw pool, whose turn
+## it is, unlocks and the win. It knows nothing about screens: views (HUD,
+## BoardPresenter, CardHUD) draw from its signals, and every action reaches it
+## through MatchController. Per-match choices arrive as a MatchSetup.
 
 signal turn_changed(player_id: int)
 signal roll_result(value: int)
@@ -9,7 +12,12 @@ signal shells_thrown(shells: Array[bool])
 ## The current turn's throws: pool = still usable, exhausted = discarded this turn,
 ## selected = index into pool driving highlights/preview (-1 = none).
 signal throw_pool_changed(pool: Array[int], exhausted: Array[int], selected: int)
-signal valid_moves_highlighted(pawns: Array[Pawn])
+## Pawns the current player can move with the selected throw ([] = not choosing a move).
+signal movable_pawns_changed(pawns: Array[Pawn])
+## Every set_state() call, before the state's own work runs.
+signal state_changed(state: GameState)
+## Players and pawns exist; views bind here.
+signal setup_done
 ## Throws discarded because no pawn could use any of them.
 signal throws_exhausted(player_id: int, values: Array[int])
 ## Three 4/8 throws in a row: the whole pool is lost.
@@ -24,9 +32,6 @@ signal turn_skipped(player_id: int)
 signal inner_ring_unlocked(player_id: int)
 signal pawn_reached_home(pawn: Pawn, pawns_home: int)
 signal bonus_turn(player_id: int, reason: String)
-## Emitted when the hovered move preview changes; empty Dictionary = cleared.
-## Keys: pawn, tiles (Array[int]), end (TileHighlighter.PreviewEnd), victim (Pawn or null).
-signal move_preview_changed(info: Dictionary)
 ## Every GameCommand applied through apply_command(), after it took effect.
 signal command_applied(command: GameCommand)
 ## State was replaced by load_snapshot() (rejoin); UIs should redraw from scratch.
@@ -42,12 +47,14 @@ enum GameState {
 	PLAYING_CARD,
 }
 
+## How a move would end (move previews).
+enum MoveEnd { NORMAL, SAFE, CAPTURE, HOME }
+
 var current_state: GameState = GameState.TURN_START
 
 # --- DATA & REFS ---
 @export_group("References")
 @export var board: Board
-@export var hud: HUD
 ## Parent node for the per-player pawn containers spawned at runtime.
 @export var pawns_root: Node2D
 
@@ -73,11 +80,11 @@ var cowry_thrower: CowryThrower
 var rules: RuleHooks = RuleHooks.new()
 ## Awaited in order before the first turn (e.g. the card draft).
 var pre_game_tasks: Array[Callable] = []
+## Who plays and with what (set before this node enters the tree; default = 2 local players).
+## setup.resume non-empty: MatchController loads that snapshot instead of starting a match.
+var setup: MatchSetup
 
-## Set from hud.roll_button; kept as a field so tests can press it.
-var roll_button: Button
-
-## One {"name", "color_name"} entry per player (from GameConfig).
+## One {"name", "color_name"} entry per player (from the setup).
 var players: Array[Dictionary] = []
 ## Board side each player sits at (see BoardData.get_seat_path).
 var player_seats: Array[int] = []
@@ -85,9 +92,6 @@ var player_seats: Array[int] = []
 var pawn_containers: Array[Node] = []
 
 var current_player_index: int = 0
-## Online: the seat this copy plays (set by MatchController). -1 = offline, every seat local.
-## Only affects what this screen offers (Throw button, highlights), never the rules.
-var local_seat: int = -1
 ## The throw value being applied (the selected pool entry); used by move validation.
 var current_roll: int = 0
 ## Path steps 0..15 are the outer ring; 16+ is the inner spiral ending at home.
@@ -111,12 +115,10 @@ var _extra_throw_pending: bool = false
 var _forced_throws: Array[int] = []
 var _game_finished: bool = false
 
-var _hovered_pawn: Pawn = null
-var _hovered_tile: int = -1
-
-# --- OPTIMIZED STATE MANAGEMENT ---
+# --- STATE ---
 func set_state(new_state: GameState) -> void:
 	current_state = new_state
+	state_changed.emit(new_state)
 
 	match new_state:
 		GameState.TURN_START:
@@ -126,40 +128,30 @@ func set_state(new_state: GameState) -> void:
 			_bonus_chain = 0
 			_extra_throw_pending = false
 			_forced_throws.clear()
-			_clear_highlights()
-			_update_board_markers()
+			_clear_movable()
 			turn_changed.emit(current_player_index)
 			_emit_pool()
 			set_state(GameState.WAITING_FOR_ROLL)
 
-		GameState.WAITING_FOR_ROLL:
-			roll_button.disabled = not is_local_turn()
-
-		GameState.SELECTING_PIECE, GameState.MOVING, GameState.PLAYING_CARD:
-			roll_button.disabled = true
-
-
 # --- READY & INITIALIZATION ---
 func _ready() -> void:
-	# 1. Safety Check
-	if not board or not hud or not pawns_root:
+	if not board or not pawns_root:
 		push_error("GameManager: Missing references!")
 		return
-
+	if setup == null:
+		setup = MatchSetup.default_setup()
 	if not cowry_thrower:
 		cowry_thrower = RandomCowryThrower.new(open_up_probability, rng_seed)
 
-	_spawn_players(GameConfig.get_players())
-
-	# 2. Wire input (MatchController turns button presses and clicks into intents)
-	roll_button = hud.roll_button
-	roll_button.disabled = true
-	board.tile_hovered.connect(_on_tile_hovered)
+	_spawn_players(setup.players)
 	board.rules = rules
-	hud.bind(self)
+	setup_done.emit()
 
-	# 3. Start game safely (after any setup other systems registered, like a draft)
+	# Start once the other systems are ready and have run their setup (like a draft).
+	# Rejoining: MatchController loads the snapshot instead.
 	await get_tree().process_frame
+	if not setup.resume.is_empty():
+		return
 	for task in pre_game_tasks:
 		await task.call()
 	start_game()
@@ -172,7 +164,6 @@ func _spawn_players(config: Array[Dictionary]) -> void:
 	player_has_killed.fill(false)
 
 	var pawn_scene: PackedScene = load(PAWN_SCENE_PATH)
-	var homebases: Array[Dictionary] = []
 	for i in players.size():
 		var container := Node2D.new()
 		container.name = "P%d_Pawns" % (i + 1)
@@ -180,7 +171,6 @@ func _spawn_players(config: Array[Dictionary]) -> void:
 		pawn_containers.append(container)
 
 		var homebase := get_homebase_tile(i)
-		homebases.append({"tile": homebase, "color": get_player_color(i)})
 		for j in GameConfig.PAWNS_PER_PLAYER:
 			var pawn: Pawn = pawn_scene.instantiate()
 			pawn.name = "Pawn%d" % (j + 1)
@@ -188,10 +178,7 @@ func _spawn_players(config: Array[Dictionary]) -> void:
 			pawn.team_color = get_player_color(i)
 			container.add_child(pawn)
 			pawn.current_tile_index = homebase
-			pawn.hovered.connect(_on_pawn_hovered)
-			pawn.unhovered.connect(_on_pawn_unhovered)
 		_layout_tile(homebase)
-	board.highlighter.set_homebases(homebases)
 
 # --- GAME LOGIC ---
 func start_game() -> void:
@@ -258,9 +245,10 @@ func get_pawn_by_ref(ref: Array) -> Pawn:
 		return null
 	return container.get_child(ref[1]) as Pawn
 
-## Is it this screen's turn to act (always true offline)?
-func is_local_turn() -> bool:
-	return local_seat < 0 or local_seat == current_player_index
+## The squares a player's pawns turn inward between: [last outer step, first inner step].
+func get_inner_ring_entry(player_id: int) -> Array[int]:
+	var path := board.board_data.get_seat_path(player_seats[player_id])
+	return [path[OUTER_RING_STEPS - 1], path[OUTER_RING_STEPS]]
 
 ## True when waiting for player input (not animating or between turns).
 func is_settled() -> bool:
@@ -308,10 +296,12 @@ func load_snapshot(snap: Dictionary) -> void:
 	var n := board.board_data.get_grid_size()
 	for tile in n * n:
 		_layout_tile(tile)
-	_clear_highlights()
-	_update_board_markers()
+	_clear_movable()
 	snapshot_loaded.emit()
 	if _game_finished:
+		for player in players.size():
+			if _check_win_condition(player):
+				game_over.emit(player) # so views show the result
 		return
 	if GameState.get(snap["state"], -1) == GameState.SELECTING_PIECE and not throw_pool.is_empty():
 		set_state(GameState.SELECTING_PIECE)
@@ -403,7 +393,6 @@ func request_select_pawn(pawn: Pawn) -> void:
 func begin_card_play() -> bool:
 	if current_state != GameState.WAITING_FOR_ROLL or _game_finished:
 		return false
-	_clear_preview()
 	set_state(GameState.PLAYING_CARD)
 	return true
 
@@ -411,7 +400,6 @@ func begin_card_play() -> bool:
 func end_card_play() -> void:
 	if _game_finished or current_state != GameState.PLAYING_CARD:
 		return
-	_update_board_markers()
 	_emit_pool()
 	set_state(GameState.WAITING_FOR_ROLL)
 
@@ -486,7 +474,7 @@ func _continue_spending() -> void:
 		# Fall through to the empty-pool handling below
 
 	if throw_pool.is_empty():
-		_clear_highlights()
+		_clear_movable()
 		if _extra_throw_pending:
 			_extra_throw_pending = false
 			_bonus_chain = 0
@@ -504,13 +492,8 @@ func _continue_spending() -> void:
 
 func _apply_selection() -> void:
 	current_roll = throw_pool[selected_throw]
-	var movable := _get_movable_pawns(current_roll)
-	for p in pawn_containers[current_player_index].get_children():
-		if p is Pawn:
-			p.set_highlighted(movable.has(p) and is_local_turn())
-	valid_moves_highlighted.emit(movable)
+	movable_pawns_changed.emit(_get_movable_pawns(current_roll))
 	_emit_pool()
-	_refresh_preview()
 
 func _is_throw_usable(value: int) -> bool:
 	return not _get_movable_pawns(value).is_empty()
@@ -533,8 +516,7 @@ func _emit_pool() -> void:
 # --- MOVE LOGIC ---
 func _execute_move(pawn: Pawn) -> void:
 	set_state(GameState.MOVING)
-	_clear_preview()
-	_clear_highlights()
+	_clear_movable()
 
 	var steps: int = throw_pool[selected_throw]
 	throw_pool.remove_at(selected_throw)
@@ -598,7 +580,6 @@ func _unlock_inner_ring(player_id: int) -> void:
 		return
 	player_has_killed[player_id] = true
 	inner_ring_unlocked.emit(player_id)
-	_update_board_markers()
 
 func _send_pawn_home(pawn: Pawn) -> void:
 	var from_index := pawn.current_tile_index
@@ -623,7 +604,7 @@ func _finish_if_won(player_id: int) -> bool:
 	if not _check_win_condition(player_id):
 		return false
 	_game_finished = true
-	_clear_highlights()
+	_clear_movable()
 	print("GAME OVER! %s wins!" % get_player_name(player_id))
 	game_over.emit(player_id)
 	return true
@@ -669,28 +650,17 @@ func _next_player_after(player_id: int) -> int:
 func _check_win_condition(player_id: int) -> bool:
 	return count_pawns_home(player_id) == pawn_containers[player_id].get_child_count()
 
-func _clear_highlights() -> void:
-	for container in pawn_containers:
-		for p in container.get_children():
-			if p is Pawn:
-				p.set_highlighted(false)
+func _clear_movable() -> void:
+	var none: Array[Pawn] = []
+	movable_pawns_changed.emit(none)
 
-## Homebase glow + inner-ring entry arrow for whoever is playing now.
-func _update_board_markers() -> void:
-	var path := board.board_data.get_seat_path(player_seats[current_player_index])
-	board.highlighter.set_active_player(
-		get_homebase_tile(current_player_index),
-		path[OUTER_RING_STEPS - 1],
-		path[OUTER_RING_STEPS],
-		get_player_color(current_player_index),
-		player_has_killed[current_player_index])
-
-# --- MOVE PREVIEW (hover) ---
+# --- MOVE PREVIEW ---
 ## What moving `pawn` by the selected throw would do, or {} if it isn't a legal choice now.
+## Keys: pawn, tiles (Array[int]), end (MoveEnd), victim (Pawn or null).
 func get_move_preview(pawn: Pawn) -> Dictionary:
 	if pawn == null or current_state != GameState.SELECTING_PIECE:
 		return {}
-	if pawn.team_id != current_player_index or not pawn.is_highlighted:
+	if pawn.team_id != current_player_index or not _validate_move(pawn):
 		return {}
 	var path := _get_path(pawn)
 	var tiles: Array[int] = []
@@ -706,47 +676,16 @@ func get_move_preview(pawn: Pawn) -> Dictionary:
 		if occupant != null and occupant.team_id != pawn.team_id and _can_capture(pawn, occupant, final_tile):
 			victim = occupant
 
-	var end := TileHighlighter.PreviewEnd.NORMAL
+	var end := MoveEnd.NORMAL
 	if final_tile == board.board_data.home_index:
-		end = TileHighlighter.PreviewEnd.HOME
+		end = MoveEnd.HOME
 	elif victim:
-		end = TileHighlighter.PreviewEnd.CAPTURE
+		end = MoveEnd.CAPTURE
 	elif board.is_safe(final_tile):
-		end = TileHighlighter.PreviewEnd.SAFE
+		end = MoveEnd.SAFE
 	return {"pawn": pawn, "tiles": tiles, "end": end, "victim": victim}
 
-func _on_pawn_hovered(pawn: Pawn) -> void:
-	_hovered_pawn = pawn
-	_refresh_preview()
-
-func _on_pawn_unhovered(pawn: Pawn) -> void:
-	if _hovered_pawn == pawn:
-		_hovered_pawn = null
-		_refresh_preview()
-
-func _on_tile_hovered(tile_index: int) -> void:
-	_hovered_tile = tile_index
-	_refresh_preview()
-
-## Preview for the hovered pawn, else for a movable pawn of the current player on the hovered tile.
-func _refresh_preview() -> void:
-	var info := get_move_preview(_hovered_pawn)
-	if info.is_empty() and _hovered_tile >= 0:
-		for p in get_pawns_at_tile(_hovered_tile):
-			info = get_move_preview(p)
-			if not info.is_empty():
-				break
-	if info.is_empty():
-		_clear_preview()
-		return
-	board.highlighter.show_move_preview(info["tiles"], info["end"])
-	move_preview_changed.emit(info)
-
-func _clear_preview() -> void:
-	board.highlighter.clear_move_preview()
-	move_preview_changed.emit({})
-
-# --- HELPERS (Optimized) ---
+# --- HELPERS ---
 func _get_movable_pawns(roll: int) -> Array[Pawn]:
 	var valid: Array[Pawn] = []
 	var container = pawn_containers[current_player_index]

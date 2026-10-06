@@ -2,8 +2,9 @@ class_name GameCommand
 extends RefCounted
 
 ## A request to change game state, applied by GameManager.apply_command().
-## Plain data so it can be logged, tested, replayed or (later) sent over a network.
-## Anything may issue commands: cards today, a debug console or network peer later.
+## Plain data so it can be logged, tested or replayed. Anything may issue commands:
+## cards today, a debug console later. (Online play sends PlayerIntents, not commands:
+## every copy rebuilds the same commands from the same events.)
 
 enum Kind {
 	MOVE_PAWN,          ## pawn, value = steps, obey_rules

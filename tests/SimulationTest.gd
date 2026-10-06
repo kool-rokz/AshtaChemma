@@ -11,6 +11,7 @@ var max_turns: int = 2000 # Safety limit to prevent infinite loops (like a stale
 ## --cards: draft random hands and play a random legal card (random targets) half the time.
 var use_cards: bool = false
 var card_manager: CardManager
+var roll_button: Button
 
 func _ready() -> void:
 	print("========================================")
@@ -27,8 +28,6 @@ func _run_simulation() -> void:
 			player_count = clampi(int(arg.get_slice("=", 1)), GameConfig.MIN_PLAYERS, GameConfig.MAX_PLAYERS)
 		elif arg == "--cards":
 			use_cards = true
-	GameConfig.players = GameConfig.default_players(player_count)
-	GameConfig.cards_enabled = use_cards
 	print("Players: %d%s" % [player_count, " (with cards)" if use_cards else ""])
 	
 	# 1. Load and Instantiate the Main Game Scene
@@ -39,6 +38,8 @@ func _run_simulation() -> void:
 		return
 
 	var main_scene: Node = packed_scene.instantiate()
+	MatchSetup.make(GameConfig.default_players(player_count), use_cards).apply_to(main_scene)
+	roll_button = (main_scene.get_node("HUD") as HUD).roll_button
 	if use_cards:
 		card_manager = main_scene.get_node("CardManager")
 		card_manager.auto_draft = true
@@ -91,10 +92,10 @@ func _print_board_state() -> void:
 
 func _simulate_roll() -> void:
 	# Emulate a UI click on the roll button
-	if not game_instance.roll_button.disabled:
+	if not roll_button.disabled:
 		turn_count += 1
 		# Directly emitting 'pressed' simulates a button click perfectly
-		game_instance.roll_button.pressed.emit()
+		roll_button.pressed.emit()
 		
 ## Half the time, play a random playable card. Returns true if one was started.
 func _simulate_card() -> bool:
@@ -107,14 +108,8 @@ func _simulate_card() -> bool:
 	return card_manager.controller.play_card(card_manager.hands[player][playable.pick_random()].id)
 
 func _simulate_piece_selection() -> void:
-	# Find the currently highlighted pawns for the active player
-	var movable_pawns = []
-	var container = game_instance.pawn_containers[game_instance.current_player_index]
-	
-	for p in container.get_children():
-		if p is Pawn and p.is_highlighted:
-			movable_pawns.append(p)
-			
+	# The pawns the rules allow for the selected throw (the ones the board highlights)
+	var movable_pawns := game_instance.get_movable_pawns(game_instance.current_roll)
 	if movable_pawns.is_empty():
 		return # Shouldn't happen in this state, but safe to check
 		

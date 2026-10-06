@@ -5,10 +5,6 @@ extends Node2D
 ## This allows us to swap board layouts (5x5 vs 7x7) without changing this script.
 @export var board_data: BoardData
 
-# We will emit this when the board is ready so the Game Manager knows
-# it can start placing pieces.
-signal board_ready
-
 ## Mouse moved onto a different tile (-1 = off the board).
 signal tile_hovered(tile_index: int)
 ## Left click on a tile (used when something asks the player to pick a square).
@@ -28,8 +24,6 @@ func _ready() -> void:
 	highlighter.name = "TileHighlighter"
 	highlighter.board = self
 	add_child(highlighter)
-
-	board_ready.emit()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventMouse:

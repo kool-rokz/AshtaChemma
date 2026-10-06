@@ -37,9 +37,11 @@ func _check(condition: bool, message: String) -> void:
 static func _wire(data: Dictionary) -> Dictionary:
 	return JSON.parse_string(JSON.stringify(data))
 
-func _spawn(cards: bool, replica: bool, seed_value: int) -> Node:
-	GameConfig.cards_enabled = cards
+func _spawn(players: int, cards: bool, replica: bool, seed_value: int, resume: Dictionary = {}) -> Node:
 	var main: Node = load(GAME_SCENE_PATH).instantiate()
+	var setup := MatchSetup.make(GameConfig.default_players(players), cards)
+	setup.resume = resume
+	setup.apply_to(main)
 	main.get_node("GameManager").rng_seed = seed_value
 	var cm: CardManager = main.get_node("CardManager")
 	cm.auto_draft = true
@@ -53,10 +55,9 @@ func _spawn(cards: bool, replica: bool, seed_value: int) -> Node:
 
 func _run(players: int, cards: bool, seed_value: int) -> void:
 	print("replay: %d players, cards %s" % [players, "on" if cards else "off"])
-	GameConfig.players = GameConfig.default_players(players)
 	_bot.seed = seed_value
-	var a := _spawn(cards, false, seed_value)
-	var b := _spawn(cards, true, seed_value + 1000) # its own RNG must never matter
+	var a := _spawn(players, cards, false, seed_value)
+	var b := _spawn(players, cards, true, seed_value + 1000) # its own RNG must never matter
 	var a_gm: GameManager = a.get_node("GameManager")
 	var b_gm: GameManager = b.get_node("GameManager")
 	var a_ctrl: MatchController = a.get_node("MatchController")
@@ -77,7 +78,7 @@ func _run(players: int, cards: bool, seed_value: int) -> void:
 		if not snapshot_checked and actions >= SNAPSHOT_AT_ACTION and a_gm.is_settled() \
 				and a_gm.current_state == GameManager.GameState.WAITING_FOR_ROLL:
 			snapshot_checked = true
-			await _check_snapshot_resume(a_ctrl, cards, seed_value + 2000)
+			await _check_snapshot_resume(a_ctrl, players, cards, seed_value + 2000)
 		_bot_step(a_gm, a_ctrl)
 	_check(a_gm.is_game_finished(), "game should finish within %d bot actions" % MAX_ACTIONS)
 	_check(snapshot_checked, "snapshot resume was exercised")
@@ -101,16 +102,14 @@ func _first_mismatch(x: Array[String], y: Array[String]) -> int:
 			return i
 	return -1 if x.size() == y.size() else mini(x.size(), y.size())
 
-## A fresh copy loads A's snapshot and must match it exactly.
-func _check_snapshot_resume(a_ctrl: MatchController, cards: bool, seed_value: int) -> void:
+## A fresh copy started from A's snapshot (the rejoin path, MatchSetup.resume) must
+## match it exactly, without running a draft or a new game start.
+func _check_snapshot_resume(a_ctrl: MatchController, players: int, cards: bool, seed_value: int) -> void:
 	var snap := _wire(a_ctrl.get_snapshot())
-	var c := _spawn(cards, false, seed_value)
+	var c := _spawn(players, cards, false, seed_value, snap)
 	var c_ctrl: MatchController = c.get_node("MatchController")
-	var c_gm: GameManager = c.get_node("GameManager")
-	var deadline := Time.get_ticks_msec() + 3000
-	while c_gm.current_state != GameManager.GameState.WAITING_FOR_ROLL and Time.get_ticks_msec() < deadline:
-		await get_tree().process_frame
-	c_ctrl.load_snapshot(snap)
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_check(c_ctrl.get_state_hash() == a_ctrl.get_state_hash(), "snapshot loaded into a fresh copy should match the original")
 	_check(c_ctrl.applied_seq == a_ctrl.applied_seq, "resumed copy continues from the same event number")
 	c.queue_free()
