@@ -1,0 +1,145 @@
+extends Node
+
+## Proves copies of a match stay identical, the basis for online play:
+##   A (authority) plays a random game with a seeded bot;
+##   B (replica, different RNG seeds) only receives A's events, sent through JSON
+##   like the network will carry them. Their state fingerprints must match at every
+##   turn start and at the end.
+##   Mid-game, A's snapshot (also through JSON) is loaded into a fresh copy C,
+##   which must fingerprint the same (rejoin / resume).
+## Run: godot --headless --path . --time-scale 30 res://tests/ReplayTest.tscn
+
+const GAME_SCENE_PATH = "res://MainGame.tscn"
+const MAX_ACTIONS := 3000
+const SNAPSHOT_AT_ACTION := 25
+
+var failures := 0
+var _bot := RandomNumberGenerator.new()
+
+func _ready() -> void:
+	await _run(2, false, 11)
+	await _run(2, true, 22)
+	await _run(3, true, 33)
+	await _run(4, true, 44)
+	if failures == 0:
+		print("✅ REPLAY TESTS PASSED")
+		get_tree().quit(0)
+	else:
+		print("❌ REPLAY TESTS FAILED: %d check(s)" % failures)
+		get_tree().quit(1)
+
+func _check(condition: bool, message: String) -> void:
+	if not condition:
+		failures += 1
+		print("  FAIL: ", message)
+
+## Network stand-in: everything crosses as JSON text.
+static func _wire(data: Dictionary) -> Dictionary:
+	return JSON.parse_string(JSON.stringify(data))
+
+func _spawn(cards: bool, replica: bool, seed_value: int) -> Node:
+	GameConfig.cards_enabled = cards
+	var main: Node = load(GAME_SCENE_PATH).instantiate()
+	main.get_node("GameManager").rng_seed = seed_value
+	var cm: CardManager = main.get_node("CardManager")
+	cm.auto_draft = true
+	var rules: CardRulesConfig = cm.rules_config.duplicate()
+	rules.rng_seed = seed_value
+	cm.rules_config = rules
+	if replica:
+		main.get_node("MatchController").mode = MatchController.Mode.REPLICA
+	add_child(main)
+	return main
+
+func _run(players: int, cards: bool, seed_value: int) -> void:
+	print("replay: %d players, cards %s" % [players, "on" if cards else "off"])
+	GameConfig.players = GameConfig.default_players(players)
+	_bot.seed = seed_value
+	var a := _spawn(cards, false, seed_value)
+	var b := _spawn(cards, true, seed_value + 1000) # its own RNG must never matter
+	var a_gm: GameManager = a.get_node("GameManager")
+	var b_gm: GameManager = b.get_node("GameManager")
+	var a_ctrl: MatchController = a.get_node("MatchController")
+	var b_ctrl: MatchController = b.get_node("MatchController")
+	a_ctrl.event_created.connect(func(event): b_ctrl.apply_event(_wire(event)))
+	var a_hashes: Array[String] = []
+	var b_hashes: Array[String] = []
+	a_gm.turn_changed.connect(func(_p): a_hashes.append(a_ctrl.get_state_hash()))
+	b_gm.turn_changed.connect(func(_p): b_hashes.append(b_ctrl.get_state_hash()))
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var actions := 0
+	var snapshot_checked := false
+	while not a_gm.is_game_finished() and actions < MAX_ACTIONS:
+		await get_tree().create_timer(0.05).timeout
+		actions += 1
+		if not snapshot_checked and actions >= SNAPSHOT_AT_ACTION and a_gm.is_settled() \
+				and a_gm.current_state == GameManager.GameState.WAITING_FOR_ROLL:
+			snapshot_checked = true
+			await _check_snapshot_resume(a_ctrl, cards, seed_value + 2000)
+		_bot_step(a_gm, a_ctrl)
+	_check(a_gm.is_game_finished(), "game should finish within %d bot actions" % MAX_ACTIONS)
+	_check(snapshot_checked, "snapshot resume was exercised")
+
+	# Let B catch up with A's last events
+	var deadline := Time.get_ticks_msec() + 5000
+	while (b_ctrl.applied_seq < a_ctrl.applied_seq or not b_gm.is_game_finished()) and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	_check(b_ctrl.applied_seq == a_ctrl.applied_seq, "replica applied %d of %d events" % [b_ctrl.applied_seq + 1, a_ctrl.applied_seq + 1])
+	_check(a_hashes.size() > 2 and a_hashes == b_hashes, "turn-start fingerprints differ (A %d turns, B %d turns, first mismatch at %d)" % [
+		a_hashes.size(), b_hashes.size(), _first_mismatch(a_hashes, b_hashes)])
+	_check(a_ctrl.get_state_hash() == b_ctrl.get_state_hash(), "final state differs")
+	print("   %d events, %d turns, final %s" % [a_ctrl.applied_seq + 1, a_hashes.size(), a_ctrl.get_state_hash()])
+	a.queue_free()
+	b.queue_free()
+	await get_tree().process_frame
+
+func _first_mismatch(x: Array[String], y: Array[String]) -> int:
+	for i in mini(x.size(), y.size()):
+		if x[i] != y[i]:
+			return i
+	return -1 if x.size() == y.size() else mini(x.size(), y.size())
+
+## A fresh copy loads A's snapshot and must match it exactly.
+func _check_snapshot_resume(a_ctrl: MatchController, cards: bool, seed_value: int) -> void:
+	var snap := _wire(a_ctrl.get_snapshot())
+	var c := _spawn(cards, false, seed_value)
+	var c_ctrl: MatchController = c.get_node("MatchController")
+	var c_gm: GameManager = c.get_node("GameManager")
+	var deadline := Time.get_ticks_msec() + 3000
+	while c_gm.current_state != GameManager.GameState.WAITING_FOR_ROLL and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	c_ctrl.load_snapshot(snap)
+	_check(c_ctrl.get_state_hash() == a_ctrl.get_state_hash(), "snapshot loaded into a fresh copy should match the original")
+	_check(c_ctrl.applied_seq == a_ctrl.applied_seq, "resumed copy continues from the same event number")
+	c.queue_free()
+
+## One random but legal action through the controller (seeded, so runs repeat).
+func _bot_step(gm: GameManager, ctrl: MatchController) -> void:
+	var cm := ctrl.card_manager
+	match gm.current_state:
+		GameManager.GameState.WAITING_FOR_ROLL:
+			if cm and cm.can_play_now() and _bot.randf() < 0.5:
+				var playable := cm.get_playable_cards(gm.current_player_index)
+				if not playable.is_empty():
+					ctrl.play_card(cm.hands[gm.current_player_index][playable[_bot.randi() % playable.size()]].id)
+					return
+			ctrl.throw_shells()
+		GameManager.GameState.PLAYING_CARD:
+			if cm and cm.is_targeting():
+				var candidates := cm.get_target_candidates()
+				if _bot.randf() < 0.1:
+					ctrl.cancel_card()
+				else:
+					ctrl.choose_target(candidates[_bot.randi() % candidates.size()])
+		GameManager.GameState.SELECTING_PIECE:
+			# Sometimes switch to another usable throw first
+			if gm.throw_pool.size() > 1 and _bot.randf() < 0.3:
+				var other := _bot.randi() % gm.throw_pool.size()
+				if gm._is_throw_usable(gm.throw_pool[other]):
+					ctrl.select_throw(other)
+					return
+			var movable: Array = gm.pawn_containers[gm.current_player_index].get_children().filter(func(p): return p.is_highlighted)
+			if not movable.is_empty():
+				ctrl.move_pawn(movable[_bot.randi() % movable.size()])

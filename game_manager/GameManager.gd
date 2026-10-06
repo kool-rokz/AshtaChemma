@@ -29,6 +29,8 @@ signal bonus_turn(player_id: int, reason: String)
 signal move_preview_changed(info: Dictionary)
 ## Every GameCommand applied through apply_command(), after it took effect.
 signal command_applied(command: GameCommand)
+## State was replaced by load_snapshot() (rejoin); UIs should redraw from scratch.
+signal snapshot_loaded
 signal game_over(winner_id: int)
 
 enum GameState {
@@ -146,9 +148,8 @@ func _ready() -> void:
 
 	_spawn_players(GameConfig.get_players())
 
-	# 2. Wire input
+	# 2. Wire input (MatchController turns button presses and clicks into intents)
 	roll_button = hud.roll_button
-	roll_button.pressed.connect(request_roll_dice)
 	roll_button.disabled = true
 	board.tile_hovered.connect(_on_tile_hovered)
 	board.rules = rules
@@ -242,6 +243,80 @@ func get_all_pawns() -> Array[Pawn]:
 				result.append(child)
 	return result
 
+## Stable id for a pawn: [player, index within that player's pawns].
+func get_pawn_ref(pawn: Pawn) -> Array:
+	return [pawn.team_id, pawn.get_index()]
+
+func get_pawn_by_ref(ref: Array) -> Pawn:
+	if ref.size() != 2 or ref[0] < 0 or ref[0] >= pawn_containers.size():
+		return null
+	var container: Node = pawn_containers[ref[0]]
+	if ref[1] < 0 or ref[1] >= container.get_child_count():
+		return null
+	return container.get_child(ref[1]) as Pawn
+
+## True when waiting for player input (not animating or between turns).
+func is_settled() -> bool:
+	return _game_finished or current_state in [GameState.WAITING_FOR_ROLL, GameState.SELECTING_PIECE]
+
+# --- SNAPSHOT (rejoin, autosave, desync checks) ---
+## Full game state as plain data. Only meaningful while settled (see is_settled).
+func to_snapshot() -> Dictionary:
+	var pawn_tiles: Array = []
+	for container in pawn_containers:
+		var tiles: Array = []
+		for p in container.get_children():
+			tiles.append(p.current_tile_index)
+		pawn_tiles.append(tiles)
+	return {
+		"current_player": current_player_index,
+		"state": GameState.keys()[current_state],
+		"unlocked": Array(player_has_killed),
+		"pawns": pawn_tiles,
+		"pool": Array(throw_pool),
+		"exhausted": Array(exhausted_throws),
+		"selected": selected_throw,
+		"bonus_chain": _bonus_chain,
+		"extra_throw_pending": _extra_throw_pending,
+		"forced_throws": Array(_forced_throws),
+		"finished": _game_finished,
+	}
+
+## Restores a snapshot taken by to_snapshot() on another copy of this match.
+func load_snapshot(snap: Dictionary) -> void:
+	current_player_index = int(snap["current_player"])
+	player_has_killed.assign(Array(snap["unlocked"]).map(func(v): return bool(v)))
+	var pawn_tiles: Array = snap["pawns"]
+	for i in pawn_containers.size():
+		for j in pawn_containers[i].get_child_count():
+			pawn_containers[i].get_child(j).current_tile_index = int(pawn_tiles[i][j])
+	throw_pool.assign(Array(snap["pool"]).map(func(v): return int(v)))
+	exhausted_throws.assign(Array(snap["exhausted"]).map(func(v): return int(v)))
+	selected_throw = int(snap["selected"])
+	_bonus_chain = int(snap["bonus_chain"])
+	_extra_throw_pending = bool(snap["extra_throw_pending"])
+	_forced_throws.assign(Array(snap["forced_throws"]).map(func(v): return int(v)))
+	_game_finished = bool(snap["finished"])
+
+	var n := board.board_data.get_grid_size()
+	for tile in n * n:
+		_layout_tile(tile)
+	_clear_highlights()
+	_update_board_markers()
+	snapshot_loaded.emit()
+	if _game_finished:
+		return
+	if GameState.get(snap["state"], -1) == GameState.SELECTING_PIECE and not throw_pool.is_empty():
+		set_state(GameState.SELECTING_PIECE)
+		_apply_selection()
+	else:
+		_emit_pool()
+		set_state(GameState.WAITING_FOR_ROLL)
+
+## Short fingerprint of a snapshot; equal on every copy that's in sync.
+static func hash_snapshot(snap: Dictionary) -> String:
+	return JSON.stringify(snap, "", true).sha256_text().left(16)
+
 ## How far along its own path a pawn is (0 = homebase, 24 = home).
 func get_path_step(pawn: Pawn) -> int:
 	return _get_path(pawn).find(pawn.current_tile_index)
@@ -261,11 +336,28 @@ func can_move_pawn(pawn: Pawn, steps: int, obey_rules: bool = true) -> bool:
 	return _validate_move(pawn, steps, obey_rules)
 
 # --- INPUT HANDLERS ---
+## Throw now (offline/tests): generate + apply in one go.
 func request_roll_dice() -> void:
 	if current_state != GameState.WAITING_FOR_ROLL:
 		push_warning("Roll ignored: Wrong state.")
 		return
-	_execute_roll()
+	_execute_roll(generate_shells())
+
+## Authority only: how the next throw lands. A pending forced throw wins;
+## otherwise the shells are thrown with the (rule-hooked) odds.
+func generate_shells() -> Array[bool]:
+	if not _forced_throws.is_empty():
+		return CowryThrower.shells_for(_forced_throws.front())
+	var odds: float = rules.modify(&"open_up_probability", open_up_probability, {"player": current_player_index})
+	cowry_thrower.open_up_probability = clampf(odds, 0.0, 1.0)
+	return cowry_thrower.throw()
+
+## Every copy of the game: apply a throw decided by the authority.
+func apply_throw(shells: Array[bool]) -> void:
+	if current_state != GameState.WAITING_FOR_ROLL:
+		push_warning("Throw ignored: Wrong state.")
+		return
+	_execute_roll(shells)
 
 ## Choose which pooled throw to spend next (from the HUD chips).
 func select_throw(index: int) -> void:
@@ -338,14 +430,10 @@ func apply_command(command: GameCommand) -> void:
 # --- ROLL LOGIC ---
 ## Throws accumulate: 4 or 8 adds to the pool and throws again; anything else
 ## closes the pool and the player spends it. Three 4/8s in a row forfeit everything.
-func _execute_roll() -> void:
-	var shells: Array[bool]
+func _execute_roll(shells: Array[bool]) -> void:
 	if not _forced_throws.is_empty():
+		# Same on every copy: the forced value is game state, not randomness
 		shells = CowryThrower.shells_for(_forced_throws.pop_front())
-	else:
-		var odds: float = rules.modify(&"open_up_probability", open_up_probability, {"player": current_player_index})
-		cowry_thrower.open_up_probability = clampf(odds, 0.0, 1.0)
-		shells = cowry_thrower.throw()
 	var value: int = rules.modify(&"throw_value", CowryThrower.score(shells), {"player": current_player_index})
 	if value != CowryThrower.score(shells):
 		shells = CowryThrower.shells_for(value)

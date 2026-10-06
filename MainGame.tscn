@@ -5,6 +5,7 @@
 [ext_resource type="PackedScene" path="res://ui/HUD.tscn" id="4_hud"]
 [ext_resource type="Script" path="res://cards/CardManager.gd" id="5_cards"]
 [ext_resource type="Resource" path="res://cards/CardRules.tres" id="6_rules"]
+[ext_resource type="Script" path="res://match/MatchController.gd" id="7_match"]
 
 [node name="Node2D" type="Node2D" unique_id=1938848503]
 
@@ -24,3 +25,8 @@ pawns_root = NodePath("../Players")
 script = ExtResource("5_cards")
 game = NodePath("../GameManager")
 rules_config = ExtResource("6_rules")
+
+[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "card_manager")]
+script = ExtResource("7_match")
+game = NodePath("../GameManager")
+card_manager = NodePath("../CardManager")

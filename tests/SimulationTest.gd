@@ -72,7 +72,7 @@ func _run_simulation() -> void:
 					_simulate_roll()
 			GameManager.GameState.PLAYING_CARD:
 				if use_cards and card_manager.is_targeting():
-					card_manager.choose_target(card_manager.get_target_candidates().pick_random())
+					card_manager.controller.choose_target(card_manager.get_target_candidates().pick_random())
 			GameManager.GameState.SELECTING_PIECE:
 				_simulate_piece_selection()
 				
@@ -100,10 +100,11 @@ func _simulate_roll() -> void:
 func _simulate_card() -> bool:
 	if not use_cards or not card_manager.can_play_now() or randf() < 0.5:
 		return false
-	var playable := card_manager.get_playable_cards(game_instance.current_player_index)
+	var player := game_instance.current_player_index
+	var playable := card_manager.get_playable_cards(player)
 	if playable.is_empty():
 		return false
-	return card_manager.request_play(playable.pick_random())
+	return card_manager.controller.play_card(card_manager.hands[player][playable.pick_random()].id)
 
 func _simulate_piece_selection() -> void:
 	# Find the currently highlighted pawns for the active player

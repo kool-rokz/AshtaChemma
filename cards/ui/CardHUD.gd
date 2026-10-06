@@ -80,7 +80,8 @@ func _build_hand_panel() -> void:
 	_hand_title.clip_text = true
 	header.add_child(_hand_title)
 	_cancel_button = _small_button("Cancel")
-	_cancel_button.pressed.connect(_cm.cancel_targeting)
+	# Actions go through MatchController as intents (set after this panel is built)
+	_cancel_button.pressed.connect(func(): _cm.controller.cancel_card())
 	header.add_child(_cancel_button)
 	_toggle_button = _small_button("Show cards")
 	_toggle_button.name = "ShowCards"
@@ -147,7 +148,7 @@ func _apply_refresh() -> void:
 			var reason := _cm.get_block_reason(player, i)
 			widget.disabled = reason != ""
 			widget.tooltip_text = card.description + ("" if reason == "" else "\n\n" + reason)
-			widget.pressed.connect(_cm.request_play.bind(i))
+			widget.pressed.connect(func(): _cm.controller.play_card(card.id))
 		else:
 			widget = _card_widget(null, HAND_CARD_SIZE, false, 13, 11)
 			widget.tooltip_text = "Click to show your cards"

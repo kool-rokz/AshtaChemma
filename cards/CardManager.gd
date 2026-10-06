@@ -45,10 +45,8 @@ var _window_open: bool = false
 var _session: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 var _ui: CardHUD
-## Clicks on a pawn also reach the tile under it; ignore the echo right after a pick.
-var _last_pick_msec: int = -1000
-
-const PICK_ECHO_MSEC := 150
+## Set by MatchController; the card UI submits intents through it.
+var controller: MatchController
 
 func _ready() -> void:
 	if not GameConfig.cards_enabled or game == null:
@@ -65,45 +63,22 @@ func _ready() -> void:
 		hands.append([])
 
 	game.set_rules(ModifierHooks.new(self))
-	game.pre_game_tasks.append(run_draft)
 	game.turn_changed.connect(_on_turn_changed)
 	game.roll_result.connect(_on_roll_result)
 	game.game_over.connect(_on_game_over)
-	game.board.tile_clicked.connect(_on_tile_clicked)
-	for pawn in game.get_all_pawns():
-		pawn.clicked.connect(_on_pawn_clicked)
 
 	_ui = CardHUD.new()
 	_ui.name = "CardHUD"
 	add_child(_ui)
 	_ui.bind(self)
 
-func _unhandled_input(event: InputEvent) -> void:
-	if not is_targeting():
-		return
-	var right_click: bool = event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT
-	if right_click or event.is_action_pressed("ui_cancel"):
-		cancel_targeting()
-		get_viewport().set_input_as_handled()
+# --- DRAFT (run by MatchController, which decides who deals the offers) ---
+## Cards a player keeps from their offer.
+func get_keep_count(offer_size: int) -> int:
+	return mini(rules_config.hand_size, offer_size)
 
-# --- DRAFT ---
-## Each player privately keeps hand_size of their own random offer. Awaited by
-## GameManager before the first turn.
-func run_draft() -> void:
-	for player in game.players.size():
-		var offer := _make_offer()
-		var picks: Array
-		if auto_draft:
-			picks = offer.slice(0, rules_config.hand_size)
-		else:
-			picks = await _ui.run_draft(player, offer, mini(rules_config.hand_size, offer.size()))
-		hands[player] = picks
-		hand_changed.emit(player)
-	if not auto_draft:
-		await _ui.show_pass_cover(0, "Start the game")
-
-## Weighted pick without repeats, so heavier cards show up more often.
-func _make_offer() -> Array:
+## Authority only: a private weighted offer (no repeats; heavier cards show up more often).
+func make_offer() -> Array:
 	var pool := library.duplicate()
 	var offer: Array = []
 	while offer.size() < rules_config.offer_size and not pool.is_empty():
@@ -121,10 +96,27 @@ func _make_offer() -> Array:
 				break
 	return offer
 
-## Replace a hand directly (tests, debugging).
+## Lets a player pick from their offer on screen; returns the kept cards.
+func pick_cards_on_screen(player: int, offer: Array) -> Array:
+	return await _ui.run_draft(player, offer, get_keep_count(offer.size()))
+
+## Hot-seat cover before the first turn.
+func show_start_cover() -> void:
+	await _ui.show_pass_cover(0, "Start the game")
+
+## Replace a hand (draft result, tests, debugging).
 func set_hand(player: int, cards: Array) -> void:
 	hands[player] = cards.duplicate()
 	hand_changed.emit(player)
+
+func set_hand_by_ids(player: int, ids: Array) -> void:
+	set_hand(player, ids.map(func(id): return find_card(id)))
+
+func find_hand_index(player: int, card_id: StringName) -> int:
+	for i in hands[player].size():
+		if hands[player][i].id == card_id:
+			return i
+	return -1
 
 func find_card(card_id: StringName) -> CardData:
 	for card in library:
@@ -190,6 +182,11 @@ func request_play(hand_index: int) -> bool:
 	_advance_targeting()
 	return true
 
+## Same, by card id (how intents name cards).
+func request_play_card(card_id: StringName) -> bool:
+	var index := find_hand_index(game.current_player_index, card_id)
+	return index >= 0 and request_play(index)
+
 func is_targeting() -> bool:
 	return not _session.is_empty() and not _session["resolving"]
 
@@ -206,7 +203,6 @@ func get_current_target_spec() -> CardTarget:
 func choose_target(target: Variant) -> bool:
 	if not is_targeting() or not target in _session["candidates"]:
 		return false
-	_last_pick_msec = Time.get_ticks_msec()
 	_session["targets"].append(target)
 	_clear_target_highlights()
 	_advance_targeting()
@@ -352,14 +348,21 @@ func _clear_target_highlights() -> void:
 		pawn.set_highlighted(false)
 	game.board.highlighter.set_target_tiles([])
 
-func _on_pawn_clicked(pawn: Pawn) -> void:
-	if is_targeting() and Time.get_ticks_msec() - _last_pick_msec > PICK_ECHO_MSEC:
-		choose_target(pawn)
-
-func _on_tile_clicked(tile: int) -> void:
+## Target value (Pawn / tile / player) -> network-safe reference, and back.
+func target_to_ref(target: Variant) -> Dictionary:
+	if target is Pawn:
+		return {"pawn": game.get_pawn_ref(target)}
 	var spec := get_current_target_spec()
-	if spec and spec.kind == CardTarget.Kind.TILE and Time.get_ticks_msec() - _last_pick_msec > PICK_ECHO_MSEC:
-		choose_target(tile)
+	if spec and spec.kind == CardTarget.Kind.TILE:
+		return {"tile": target}
+	return {"player": target}
+
+func ref_to_target(ref: Dictionary) -> Variant:
+	if ref.has("pawn"):
+		return game.get_pawn_by_ref(ref["pawn"])
+	if ref.has("tile"):
+		return int(ref["tile"])
+	return int(ref.get("player", -1))
 
 # --- MODIFIERS ---
 ## Called by AddModifierEffect. TARGET_* scopes bind to card target `target_index`.
@@ -369,6 +372,10 @@ func add_modifier(data: CardModifier, ctx: CardContext, target_index: int) -> vo
 	active.card = ctx.card
 	active.owner = ctx.player
 	active.turns_left = data.duration_turns
+	for i in ctx.card.effects.size():
+		var effect := ctx.card.effects[i]
+		if effect is AddModifierEffect and effect.modifier == data:
+			active.effect_index = i
 	var target: Variant = ctx.target(target_index)
 	if target is Pawn:
 		active.target_pawn = target
@@ -430,3 +437,52 @@ func _on_game_over(_winner: int) -> void:
 		_session = {}
 		_clear_target_highlights()
 	play_window_changed.emit(false)
+
+# --- SNAPSHOT (rejoin, autosave, desync checks) ---
+## Card state as plain data. Taken between card plays (never mid-targeting).
+func to_snapshot() -> Dictionary:
+	var modifiers: Array = []
+	for active in active_modifiers:
+		modifiers.append({
+			"card": String(active.card.id),
+			"effect": active.effect_index,
+			"owner": active.owner,
+			"target_player": active.target_player,
+			"target_pawn": game.get_pawn_ref(active.target_pawn) if active.target_pawn else [],
+			"target_tile": active.target_tile,
+			"turns_left": active.turns_left,
+		})
+	return {
+		"hands": hands.map(func(hand): return hand.map(func(card): return String(card.id))),
+		"played_this_turn": _played_this_turn,
+		"window_open": _window_open,
+		"cards_played": cards_played,
+		"modifiers": modifiers,
+	}
+
+func load_snapshot(snap: Dictionary) -> void:
+	_session = {}
+	_clear_target_highlights()
+	var saved_hands: Array = snap["hands"]
+	for player in saved_hands.size():
+		hands[player] = Array(saved_hands[player]).map(func(id): return find_card(StringName(id)))
+	_played_this_turn = int(snap["played_this_turn"])
+	_window_open = bool(snap["window_open"])
+	cards_played = int(snap["cards_played"])
+	active_modifiers.clear()
+	for m in snap["modifiers"]:
+		var card := find_card(StringName(m["card"]))
+		var active := ActiveModifier.new()
+		active.card = card
+		active.effect_index = int(m["effect"])
+		active.data = (card.effects[active.effect_index] as AddModifierEffect).modifier
+		active.owner = int(m["owner"])
+		active.target_player = int(m["target_player"])
+		active.target_pawn = game.get_pawn_by_ref(Array(m["target_pawn"]).map(func(v): return int(v))) if not Array(m["target_pawn"]).is_empty() else null
+		active.target_tile = int(m["target_tile"])
+		active.turns_left = int(m["turns_left"])
+		active_modifiers.append(active)
+	_refresh_markers()
+	for player in hands.size():
+		hand_changed.emit(player)
+	play_window_changed.emit(_window_open)

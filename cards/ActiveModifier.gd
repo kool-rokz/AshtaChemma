@@ -6,6 +6,8 @@ extends RefCounted
 
 var data: CardModifier
 var card: CardData
+## Which of card.effects created it (an AddModifierEffect); lets snapshots name it.
+var effect_index: int = -1
 var owner: int = -1
 var target_player: int = -1
 var target_pawn: Pawn

@@ -8,6 +8,9 @@ const START_SCREEN_PATH := "res://ui/StartScreen.tscn"
 const PANEL_WIDTH := 360.0
 const MAX_LOG_LINES := 60
 
+## A throw chip was clicked (index into the pool); MatchController turns it into an intent.
+signal throw_chip_pressed(index: int)
+
 var roll_button: Button
 
 var _gm: GameManager
@@ -56,6 +59,7 @@ func bind(gm: GameManager) -> void:
 	gm.bonus_turn.connect(_on_bonus_turn)
 	gm.move_preview_changed.connect(_on_move_preview_changed)
 	gm.game_over.connect(_on_game_over)
+	gm.snapshot_loaded.connect(func(): _on_turn_changed(gm.current_player_index))
 	gm.board.tile_hovered.connect(_on_tile_hovered)
 	_log_line("Game started with %d players." % gm.players.size())
 
@@ -316,7 +320,7 @@ func _on_throw_pool_changed(pool: Array[int], exhausted: Array[int], selected: i
 			style.border_color = _gm.get_player_color(_gm.current_player_index)
 			chip.add_theme_stylebox_override("normal", style)
 			chip.add_theme_stylebox_override("hover", style)
-		chip.pressed.connect(_gm.select_throw.bind(i))
+		chip.pressed.connect(throw_chip_pressed.emit.bind(i))
 		_pool_row.add_child(chip)
 	for value in exhausted:
 		_pool_row.add_child(_exhausted_chip(value))

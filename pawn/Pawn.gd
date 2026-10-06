@@ -103,16 +103,7 @@ func move_along_path(path_coordinates: Array[Vector2]) -> void:
 	await tween.finished
 	movement_finished.emit()
 
-# Handle clicks
+# Clicks are only reported; MatchController decides what they mean (move or card target)
 func _on_input_event(_viewport, event, _shape_idx) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		print("Pawn clicked: ", name)
 		clicked.emit(self)
-		var manager = get_tree().current_scene
-		if not manager is GameManager:
-			manager = get_tree().current_scene.find_child("GameManager*", true, false)
-			
-		if manager and manager.has_method("request_select_pawn"):
-			manager.request_select_pawn(self)
-		else:
-			push_error("Pawn could not find GameManager!")
