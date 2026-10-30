@@ -348,14 +348,33 @@ func request_roll_dice() -> void:
 		return
 	_execute_roll(generate_shells())
 
-## Authority only: how the next throw lands. A pending forced throw wins;
-## otherwise the shells are thrown with the (rule-hooked) odds.
-func generate_shells() -> Array[bool]:
+## Authority only: how the next throw lands. A pending forced throw wins; otherwise
+## the shells are thrown with the (rule-hooked) odds, keeping some of the hand's faces
+## when "skill throws" are on (see keep_chance).
+func generate_shells(gesture: ThrowGesture = null) -> Array[bool]:
 	if not _forced_throws.is_empty():
 		return CowryThrower.shells_for(_forced_throws.front())
 	var odds: float = rules.modify(&"open_up_probability", open_up_probability, {"player": current_player_index})
 	cowry_thrower.open_up_probability = clampf(odds, 0.0, 1.0)
-	return cowry_thrower.throw()
+	var keep := keep_chance(gesture)
+	if keep <= 0.0:
+		return cowry_thrower.throw()
+	return cowry_thrower.throw_with_hand(gesture.faces, keep)
+
+## "Skill throws": the chance each shell lands as it lay in the hand. The lobby's level,
+## less the harder the release; nothing for quick tosses or throws that weren't shaken.
+func keep_chance(gesture: ThrowGesture) -> float:
+	if gesture == null or gesture.quick or gesture.shaken < GameConfig.SKILL_MIN_SHAKE:
+		return 0.0
+	return GameConfig.THROW_SKILL_KEEP.get(setup.throw_skill, 0.0) * (1.0 - gesture.power)
+
+## How `shells` will land once applied: a pending forced throw and the "throw_value"
+## hook can change them (what apply_throw() will use). Read-only, for the throw's look.
+func preview_throw(shells: Array[bool]) -> Array[bool]:
+	if not _forced_throws.is_empty():
+		shells = CowryThrower.shells_for(_forced_throws.front())
+	var value: int = rules.modify(&"throw_value", CowryThrower.score(shells), {"player": current_player_index})
+	return CowryThrower.shells_for(value) if value != CowryThrower.score(shells) else shells
 
 ## Every copy of the game: apply a throw decided by the authority.
 func apply_throw(shells: Array[bool]) -> void:

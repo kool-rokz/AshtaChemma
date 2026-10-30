@@ -27,6 +27,9 @@ const URL_TIMEOUT := 45.0
 ## (or the editor's Stop button) is shut down next time.
 const PID_FILE := "user://cloudflared.pid"
 const REACH_TIMEOUT := 60.0
+## One connection attempt through a fresh tunnel (TLS + Cloudflare routing) may take this long.
+const REACH_ATTEMPT_TIMEOUT := 8.0
+const REACH_RETRY_DELAY := 2.0
 
 var room_code: String = ""
 var _pid: int = -1
@@ -70,6 +73,7 @@ func open(port: int) -> void:
 	var pid_file := FileAccess.open(PID_FILE, FileAccess.WRITE)
 	if pid_file:
 		pid_file.store_string(str(_pid))
+		pid_file.close() # now: this function keeps running (and the file open) for the whole tunnel
 	status_changed.emit("Getting a room code...")
 	var url := await _wait_for_url(log_path, generation)
 	if generation != _generation:
@@ -173,20 +177,24 @@ func _wait_for_url(log_path: String, generation: int) -> String:
 ## A brand-new tunnel takes a while to go live (Cloudflare answers with its own error page
 ## until then). Waits until a real WebSocket connection gets through to the game, the same
 ## kind of connection a friend makes. Returns false if that didn't happen in time.
-func _wait_until_reachable(url: String, generation: int) -> bool:
-	var ws_url := url.replace("https://", "wss://")
-	var deadline := Time.get_ticks_msec() + int(REACH_TIMEOUT * 1000.0)
+## timeout: seconds to keep trying (tests pass a short one).
+func _wait_until_reachable(url: String, generation: int, timeout: float = REACH_TIMEOUT) -> bool:
+	var ws_url := url.replace("https://", "wss://").replace("http://", "ws://")
+	var deadline := Time.get_ticks_msec() + int(timeout * 1000.0)
 	while Time.get_ticks_msec() < deadline and generation == _generation:
 		var ws := WebSocketPeer.new()
-		ws.handshake_timeout = 8.0
 		if ws.connect_to_url(ws_url) == OK:
+			# WebSocketPeer has no handshake timeout of its own: give each attempt a deadline
+			var give_up := mini(Time.get_ticks_msec() + int(REACH_ATTEMPT_TIMEOUT * 1000.0), deadline)
 			var state := WebSocketPeer.STATE_CONNECTING
-			while state == WebSocketPeer.STATE_CONNECTING:
+			while state == WebSocketPeer.STATE_CONNECTING and Time.get_ticks_msec() < give_up:
 				await get_tree().process_frame
 				ws.poll()
 				state = ws.get_ready_state()
+			ws.close()
 			if state == WebSocketPeer.STATE_OPEN:
-				ws.close()
 				return true
-		await get_tree().create_timer(2.0).timeout
+		if Time.get_ticks_msec() + int(REACH_RETRY_DELAY * 1000.0) >= deadline:
+			break # no time for another try
+		await get_tree().create_timer(REACH_RETRY_DELAY, true, false, true).timeout
 	return false

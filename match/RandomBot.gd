@@ -4,6 +4,19 @@ extends RefCounted
 ## Plays one random legal action for the seat `ctrl` acts for, through the controller
 ## (so online it goes to the host like a real click). Used by tests and the --bot dev flag.
 
+## A shaken, hand-thrown gesture with random strength and faces (exercises "skill throws").
+static func _random_gesture(rng: RandomNumberGenerator) -> ThrowGesture:
+	var g := ThrowGesture.new()
+	g.quick = false
+	g.origin = Vector2(rng.randf_range(470, 790), rng.randf_range(207, 527))
+	g.direction = Vector2.from_angle(rng.randf() * TAU)
+	g.power = rng.randf()
+	g.shaken = rng.randf()
+	for i in 4:
+		g.faces[i] = rng.randf() < 0.5
+	g.seed_value = rng.randi()
+	return g
+
 static func step(gm: GameManager, ctrl: MatchController, rng: RandomNumberGenerator) -> void:
 	var cm := ctrl.card_manager
 	var seat := ctrl.acting_seat()
@@ -14,7 +27,7 @@ static func step(gm: GameManager, ctrl: MatchController, rng: RandomNumberGenera
 				if not playable.is_empty():
 					ctrl.play_card(cm.hands[seat][playable[rng.randi() % playable.size()]].id)
 					return
-			ctrl.throw_shells()
+			ctrl.throw_shells(_random_gesture(rng) if rng.randf() < 0.4 else null)
 		GameManager.GameState.PLAYING_CARD:
 			if cm and cm.is_targeting():
 				var candidates := cm.get_target_candidates()

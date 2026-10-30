@@ -20,3 +20,14 @@ func throw() -> Array[bool]:
 	for i in SHELL_COUNT:
 		shells.append(rng.randf() < open_up_probability)
 	return shells
+
+## Each shell: kept as in the hand with chance `keep`, else open-up with the usual odds.
+## So a kept-open shell lands open with probability keep + (1 - keep) * p.
+func throw_with_hand(hand: Array[bool], keep: float) -> Array[bool]:
+	var shells: Array[bool] = []
+	for i in SHELL_COUNT:
+		if i < hand.size() and rng.randf() < keep:
+			shells.append(hand[i])
+		else:
+			shells.append(rng.randf() < open_up_probability)
+	return shells

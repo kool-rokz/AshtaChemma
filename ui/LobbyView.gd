@@ -16,6 +16,7 @@ var _autostart: int
 var _players_box: VBoxContainer
 var _swatches_box: HBoxContainer
 var _cards_toggle: CheckBox
+var _skill_picker: OptionButton
 var _start_button: Button
 var _lobby_status: Label
 var _room_code_label: Label
@@ -49,6 +50,7 @@ func _ready() -> void:
 	_cards_toggle.disabled = not _net.is_host()
 	_cards_toggle.toggled.connect(func(on): _net.set_setting("cards", on))
 	add_child(_cards_toggle)
+	add_child(_build_skill_row())
 
 	_lobby_status = MenuWidgets.label("", 15, MenuWidgets.MUTED)
 	add_child(_lobby_status)
@@ -73,6 +75,32 @@ func _ready() -> void:
 	_net.room_code_ready.connect(_on_room_code_ready)
 	_net.room_code_failed.connect(show_no_room_code)
 	_refresh()
+
+const SKILL_LEVELS := ["off", "light", "strong"]
+const SKILL_LABELS := ["Off", "Light", "Strong"]
+
+## "Skill throws": how much a gentle, shaken throw keeps the faces seen in the hand.
+func _build_skill_row() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	var title := MenuWidgets.label("Skill throws", 18, Color.WHITE, HORIZONTAL_ALIGNMENT_LEFT)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(title)
+	_skill_picker = OptionButton.new()
+	_skill_picker.name = "SkillThrows"
+	_skill_picker.add_theme_font_size_override("font_size", 16)
+	for i in SKILL_LEVELS.size():
+		var keep: float = GameConfig.THROW_SKILL_KEEP[SKILL_LEVELS[i]]
+		_skill_picker.add_item(SKILL_LABELS[i] if keep == 0.0 else "%s (up to %d%%)" % [SKILL_LABELS[i], roundi(keep * 100)])
+	_skill_picker.disabled = not _net.is_host()
+	_skill_picker.item_selected.connect(func(i): _net.set_setting("throw_skill", SKILL_LEVELS[i]))
+	row.add_child(_skill_picker)
+	box.add_child(row)
+	box.add_child(MenuWidgets.label("Shake the shells and let go gently: each may land the way it lay in your hand. Off = pure luck.",
+		13, MenuWidgets.MUTED, HORIZONTAL_ALIGNMENT_LEFT))
+	return box
 
 func _build_room_code() -> void:
 	add_child(MenuWidgets.label("Room code", 15, MenuWidgets.MUTED))
@@ -150,6 +178,8 @@ func _refresh() -> void:
 		_swatches_box.add_child(_swatch(color_name, color_name == mine, taken))
 
 	_cards_toggle.set_pressed_no_signal(bool(_net.settings.get("cards", true)))
+	var skill := String(_net.settings.get("throw_skill", GameConfig.DEFAULT_THROW_SKILL))
+	_skill_picker.select(maxi(0, SKILL_LEVELS.find(skill)))
 	var count := _net.roster.size()
 	if _net.is_host():
 		_start_button.disabled = count < GameConfig.MIN_PLAYERS

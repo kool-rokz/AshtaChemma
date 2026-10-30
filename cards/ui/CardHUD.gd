@@ -325,7 +325,7 @@ func _on_card_played(player: int, card: CardData, targets: Array) -> void:
 
 func _on_card_resolved(_player: int, _card: CardData) -> void:
 	if not _game.is_game_finished():
-		_hud.set_hint("Throw the shells.")
+		_hud.set_hint(HUD.THROW_HINT)
 	_refresh()
 
 func _on_card_rejected(_player: int, card: CardData, reason: String) -> void:

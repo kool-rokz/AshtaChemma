@@ -16,6 +16,8 @@ extends Node
 ##   host -> each     event(dict)              numbered event (redacted per seat: no peeking at hands)
 ##   host -> one      private(dict)            e.g. your draft offer
 ##   host -> one      rejected(intent, reason)
+##   client -> host   shake(state)             live hand while shaking (cosmetic, unreliable)
+##   host -> others   shake_seen(seat, state)  the same, relayed
 ## Messages that arrive before the match scene is ready are buffered.
 ## Mid-match, a client that loses the host reconnects by itself; the host holds its
 ## seat, sends a snapshot once the game is between actions, then events as usual.
@@ -26,7 +28,7 @@ extends Node
 ## uses Godot's MultiplayerAPI, so WebRTC (or anything else) is a swap of those two.
 
 signal roster_changed(roster: Array)
-## Room settings changed (host's choices, e.g. {"cards": true}).
+## Room settings changed (host's choices, e.g. {"cards": true, "throw_skill": "light"}).
 signal settings_changed(settings: Dictionary)
 signal joined(seat: int)
 signal connection_failed(reason: String)
@@ -55,7 +57,7 @@ const HANDSHAKE_TIMEOUT := 15.0
 ## Mid-match reconnects before giving up (with the host's ABSENT_TURN_GRACE in mind).
 const RECONNECT_ATTEMPTS := 5
 const RECONNECT_DELAY := 3.0
-const DEFAULT_SETTINGS := {"cards": true}
+const DEFAULT_SETTINGS := {"cards": true, "throw_skill": GameConfig.DEFAULT_THROW_SKILL}
 
 var role: Role = Role.NONE
 var local_seat: int = -1
@@ -473,7 +475,8 @@ func start_match() -> void:
 	if not is_host() or roster.size() < GameConfig.MIN_PLAYERS:
 		return
 	var players: Array = roster.map(func(entry): return {"name": entry["name"], "color_name": entry["color_name"]})
-	var config := {"players": players, "cards": bool(settings.get("cards", true))}
+	var config := {"players": players, "cards": bool(settings.get("cards", true)),
+		"throw_skill": String(settings.get("throw_skill", GameConfig.DEFAULT_THROW_SKILL))}
 	_rpc_start.rpc(config)
 	_begin_match(config)
 
@@ -485,7 +488,7 @@ func _rpc_start(config: Dictionary) -> void:
 func _begin_match(config: Dictionary, resume: Dictionary = {}) -> void:
 	match_config = config
 	in_match = true
-	var setup := MatchSetup.make(config["players"], bool(config["cards"]))
+	var setup := MatchSetup.make(config["players"], bool(config["cards"]), str(config.get("throw_skill", "off")))
 	setup.resume = resume
 	if scene_loader.is_valid():
 		scene_loader.call(setup)
@@ -503,9 +506,14 @@ func register_controller(controller: MatchController) -> void:
 	_pending_events.clear()
 
 # --- MATCH TRAFFIC ---
-## Client: send an intent to the host.
+## Client: send an intent to the host (dropped while reconnecting: nobody to hear it).
 func send_intent(intent: Dictionary) -> void:
-	_rpc_intent.rpc_id(1, intent)
+	if _is_connected():
+		_rpc_intent.rpc_id(1, intent)
+
+func _is_connected() -> bool:
+	var peer := multiplayer.multiplayer_peer
+	return peer != null and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_intent(intent: Dictionary) -> void:
@@ -542,6 +550,33 @@ func _rpc_private(data: Dictionary) -> void:
 		_controller.receive_private(data)
 	else:
 		_pending_private.append(data)
+
+# --- LIVE SHAKING (cosmetic: not events, never replayed; ~10 per second) ---
+## This copy's player is shaking (ShellStage hand state).
+func send_shake(state: Dictionary) -> void:
+	if is_host():
+		relay_shake(local_seat, state)
+	elif _is_connected():
+		_rpc_shake.rpc_id(1, state)
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
+func _rpc_shake(state: Dictionary) -> void:
+	if not is_host() or _controller == null:
+		return
+	var seat := _seat_of_peer(multiplayer.get_remote_sender_id())
+	if seat >= 0:
+		_controller.receive_shake(seat, state) # checks it's that seat's turn, then relays
+
+## Host: pass `seat`'s shaking on to everyone else.
+func relay_shake(seat: int, state: Dictionary) -> void:
+	for entry in roster:
+		if entry["seat"] != local_seat and entry["seat"] != seat and _is_present(entry):
+			_rpc_shake_seen.rpc_id(entry["peer"], seat, state)
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _rpc_shake_seen(seat: int, state: Dictionary) -> void:
+	if _controller:
+		_controller.receive_shake(seat, state)
 
 func send_rejected(seat: int, intent: Dictionary, reason: String) -> void:
 	var peer := _peer_of_seat(seat)

@@ -8,7 +8,7 @@ extends RefCounted
 ## so intents survive the network (to_dict / from_dict).
 
 enum Kind {
-	THROW,          ## throw the shells
+	THROW,          ## throw the shells; gesture = how (ThrowGesture.to_dict(), {} = quick toss)
 	SELECT_THROW,   ## index = which pooled throw to use next
 	MOVE_PAWN,      ## pawn = [player, index]
 	PLAY_CARD,      ## card_id from the player's hand
@@ -25,6 +25,7 @@ var pawn: Array = []
 var card_id: StringName = &""
 var target: Dictionary = {}
 var card_ids: Array = []
+var gesture: Dictionary = {}
 
 static func make(intent_kind: Kind, by_player: int) -> PlayerIntent:
 	var intent := PlayerIntent.new()
@@ -32,8 +33,10 @@ static func make(intent_kind: Kind, by_player: int) -> PlayerIntent:
 	intent.player = by_player
 	return intent
 
-static func throw_shells(by_player: int) -> PlayerIntent:
-	return make(Kind.THROW, by_player)
+static func throw_shells(by_player: int, throw_gesture: Dictionary = {}) -> PlayerIntent:
+	var intent := make(Kind.THROW, by_player)
+	intent.gesture = throw_gesture
+	return intent
 
 static func select_throw(by_player: int, pool_index: int) -> PlayerIntent:
 	var intent := make(Kind.SELECT_THROW, by_player)
@@ -70,6 +73,7 @@ func to_dict() -> Dictionary:
 	if card_id != &"": d["card"] = String(card_id)
 	if not target.is_empty(): d["target"] = target
 	if not card_ids.is_empty(): d["cards"] = card_ids.map(func(id): return String(id))
+	if not gesture.is_empty(): d["gesture"] = gesture
 	return d
 
 ## Parses an intent from the network. Returns null for anything malformed (unknown
@@ -100,6 +104,9 @@ static func from_dict(d: Variant) -> PlayerIntent:
 	var raw_cards: Variant = d.get("cards", [])
 	if raw_cards is Array:
 		intent.card_ids = raw_cards.filter(func(id): return id is String or id is StringName).map(func(id): return StringName(id))
+	# Only a throw carries a gesture, and only in its checked, clamped form
+	if intent.kind == Kind.THROW and d.has("gesture"):
+		intent.gesture = ThrowGesture.from_dict(d["gesture"]).to_dict()
 	return intent
 
 static func _as_int(value: Variant, fallback: int) -> int:

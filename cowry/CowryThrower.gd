@@ -1,8 +1,9 @@
 class_name CowryThrower
 extends RefCounted
 
-## Source of cowry shell outcomes. Subclasses decide HOW the shells land
-## (RNG today, physics bodies later); scoring is shared and lives here.
+## Source of cowry shell outcomes (the authority's randomness). Subclasses decide how
+## the shells land; scoring is shared and lives here. The 3D throw players see is only
+## a picture of the outcome decided here (see shells/ShellStage.gd).
 
 const SHELL_COUNT := 4
 
@@ -17,6 +18,12 @@ var open_up_probability: float = 0.5
 func throw() -> Array[bool]:
 	push_error("CowryThrower.throw() must be overridden")
 	return []
+
+## A throw from a hand where the shells lay as `hand`: each shell keeps its hand face
+## with chance `keep`, otherwise lands as throw() would ("skill throws").
+## Throwers that don't roll randomly (test scripts) ignore the hand.
+func throw_with_hand(_hand: Array[bool], _keep: float) -> Array[bool]:
+	return throw()
 
 ## Maps a throw to movement points: k open-up shells move k,
 ## except zero open-up (all down, "ashta") which moves 8.

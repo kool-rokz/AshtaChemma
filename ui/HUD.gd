@@ -7,6 +7,7 @@ extends CanvasLayer
 
 const START_SCREEN_PATH := "res://ui/StartScreen.tscn"
 const PANEL_WIDTH := 360.0
+const THROW_HINT := "Hold on the board, shake, and let go to throw (or hold Space / gamepad A). A click or the button is a quick toss."
 const MAX_LOG_LINES := 60
 
 ## A throw chip was clicked (index into the pool); MatchController turns it into an intent.
@@ -25,7 +26,8 @@ var _gm: GameManager
 var _closed: bool = false
 var _turn_label: Label
 var _hint_label: Label
-var _shells_view: ShellsView
+## The last throw's shells in 3D (ShellStage lands thrown shells here).
+var shells_view: ShellsView
 var _roll_value_label: Label
 var _pool_row: HBoxContainer
 var _tile_label: RichTextLabel
@@ -68,7 +70,7 @@ func bind(gm: GameManager) -> void:
 	presenter.preview_changed.connect(_on_move_preview_changed)
 	gm.state_changed.connect(_on_state_changed)
 	gm.turn_changed.connect(_on_turn_changed)
-	gm.shells_thrown.connect(func(shells: Array[bool]): _shells_view.shells = shells)
+	gm.shells_thrown.connect(func(shells: Array[bool]): shells_view.shells = shells)
 	gm.roll_result.connect(_on_roll_result)
 	gm.movable_pawns_changed.connect(_on_moves_available)
 	gm.throw_pool_changed.connect(_on_throw_pool_changed)
@@ -86,6 +88,10 @@ func bind(gm: GameManager) -> void:
 	gm.snapshot_loaded.connect(func(): _on_turn_changed(gm.current_player_index))
 	gm.board.tile_hovered.connect(_on_tile_hovered)
 	_log_line("Game started with %d players." % gm.players.size())
+	var keep: float = GameConfig.THROW_SKILL_KEEP.get(gm.setup.throw_skill, 0.0)
+	if keep > 0.0:
+		_log_line("Skill throws (%s): shake, then let go gently, and each shell may land the way it lay in your hand (up to %d%%)." % [
+			gm.setup.throw_skill, roundi(keep * 100)])
 
 # --- LAYOUT ---
 func _make_panel(pos: Vector2, panel_size: Vector2) -> VBoxContainer:
@@ -133,8 +139,8 @@ func _build_right_panel() -> void:
 
 	var throw_row := HBoxContainer.new()
 	throw_row.add_theme_constant_override("separation", 16)
-	_shells_view = ShellsView.new()
-	throw_row.add_child(_shells_view)
+	shells_view = ShellsView.new()
+	throw_row.add_child(shells_view)
 	_roll_value_label = _label("–", 36)
 	throw_row.add_child(_roll_value_label)
 	box.add_child(throw_row)
@@ -157,6 +163,7 @@ func _build_right_panel() -> void:
 	roll_button.text = "Throw shells"
 	roll_button.custom_minimum_size = Vector2(0, 44)
 	roll_button.add_theme_font_size_override("font_size", 18)
+	roll_button.focus_mode = Control.FOCUS_NONE # Space is the shells' hold key, not a button press
 	box.add_child(roll_button)
 
 	box.add_child(HSeparator.new())
@@ -354,10 +361,10 @@ func _on_turn_changed(player_id: int) -> void:
 	var mine := _online() and is_local_turn()
 	_turn_label.text = "Your turn" if mine else "%s's turn" % _gm.get_player_name(player_id)
 	_turn_label.add_theme_color_override("font_color", _gm.get_player_color(player_id))
-	_hint_label.text = "Throw the shells." if is_local_turn() else _waiting("is about to throw...")
+	_hint_label.text = THROW_HINT if is_local_turn() else _waiting("is about to throw...")
 	roll_button.text = "Throw shells"
 	# The previous player's throw would read as this player's, so start blank
-	_shells_view.shells = []
+	shells_view.shells = []
 	_roll_value_label.text = "–"
 	_preview_label.text = ""
 	_set_glow_color(_gm.get_player_color(player_id))

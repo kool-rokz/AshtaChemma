@@ -94,21 +94,42 @@ func _room_from_page_url() -> String:
 	return str(room).strip_edges() if room != null else ""
 
 # --- PASTE ---
-## Browsers don't let Godot read the clipboard on Ctrl+V, but they do hand the text
-## to a "paste" event: put it into whichever text field has focus.
+## Godot's web runtime calls preventDefault() on every key press on its canvas, which
+## also cancels the browser's paste. While the menu is open, a capture listener lets
+## Ctrl/Cmd+V through to the browser (Godot never sees it), and the "paste" event
+## that follows puts the text into whichever text field has focus.
+const WEB_PASTE_HOOK := """
+if (!window.ashtaPasteHook) {
+	window.ashtaPasteHook = true;
+	window.addEventListener('keydown', function (e) {
+		if (window.ashtaPasteEnabled && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+			e.stopImmediatePropagation();
+		}
+	}, true);
+}
+window.ashtaPasteEnabled = true;
+"""
+
 func _hook_web_paste() -> void:
 	if not OS.has_feature("web"):
 		return
+	JavaScriptBridge.eval(WEB_PASTE_HOOK)
 	_web_paste_callback = JavaScriptBridge.create_callback(_on_web_paste)
 	JavaScriptBridge.get_interface("window").addEventListener("paste", _web_paste_callback)
+
+func _exit_tree() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.ashtaPasteEnabled = false;")
+		if _web_paste_callback:
+			JavaScriptBridge.get_interface("window").removeEventListener("paste", _web_paste_callback)
 
 func _on_web_paste(args: Array) -> void:
 	var data: Variant = args[0].clipboardData
 	if data != null:
 		_paste_into_focus(str(data.getData("text")))
 
-## Web: let the browser's paste event do the pasting (Godot's own Ctrl+V would paste
-## its internal clipboard, which is usually empty or stale there).
+## Web: the browser's paste event does the pasting (in case a Ctrl+V still reaches
+## Godot, its own paste would use its internal clipboard, usually empty or stale there).
 func _input(event: InputEvent) -> void:
 	if OS.has_feature("web") and event is InputEventKey and event.pressed \
 			and event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed) \
@@ -117,25 +138,42 @@ func _input(event: InputEvent) -> void:
 
 func _paste_into_focus(text: String) -> void:
 	var edit := get_viewport().gui_get_focus_owner() as LineEdit
-	if edit and text != "":
+	if edit == null or text.strip_edges() == "":
+		return
+	if edit == _address_edit:
+		_set_address(text) # an invite becomes its room code
+	else:
 		edit.insert_text_at_caret(text.strip_edges())
 
 ## The Paste button next to the address field (also for phones, which have no Ctrl+V).
+## Web: read the clipboard if the page may (not inside itch.io's frame, which isn't
+## given clipboard access); otherwise ask in the browser's own text box, where
+## pasting always works.
 func _paste_address() -> void:
 	if not OS.has_feature("web"):
-		_address_edit.text = DisplayServer.clipboard_get().strip_edges()
+		_set_address(DisplayServer.clipboard_get())
 		return
 	var clipboard: Variant = JavaScriptBridge.get_interface("navigator").clipboard
 	if clipboard == null:
-		_show_join("This browser can't paste from a button. Click the box and press Ctrl+V.")
+		_ask_browser_for_address()
 		return
-	var on_text := JavaScriptBridge.create_callback(func(args: Array):
-		if _address_edit and is_instance_valid(_address_edit):
-			_address_edit.text = str(args[0]).strip_edges())
-	var on_error := JavaScriptBridge.create_callback(func(_args: Array):
-		_show_join("The browser didn't allow pasting. Click the box and press Ctrl+V."))
+	var on_text := JavaScriptBridge.create_callback(func(args: Array): _set_address(str(args[0])))
+	var on_error := JavaScriptBridge.create_callback(func(_args: Array): _ask_browser_for_address())
 	_web_clipboard_callbacks = [on_text, on_error]
 	clipboard.readText().then(on_text, on_error)
+
+func _ask_browser_for_address() -> void:
+	var typed: Variant = JavaScriptBridge.get_interface("window").prompt("Paste the room code (or the whole invite) here:", "")
+	if typed != null and str(typed).strip_edges() != "":
+		_set_address(str(typed))
+	elif _address_edit and is_instance_valid(_address_edit):
+		_address_edit.grab_focus()
+
+## Fills the address box with what was pasted (an invite is reduced to its room code).
+func _set_address(text: String) -> void:
+	if _address_edit and is_instance_valid(_address_edit) and text.strip_edges() != "":
+		_address_edit.text = NetSession.find_address(text)
+		_address_edit.caret_column = _address_edit.text.length()
 
 # --- SCREENS ---
 func _clear() -> void:

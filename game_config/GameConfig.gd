@@ -10,10 +10,18 @@ const PAWNS_PER_PLAYER := 4
 const NAME_MAX_LENGTH := 16
 
 ## Shown in the menu. Bump when shipping a build.
-const GAME_VERSION := "0.4.0"
+const GAME_VERSION := "0.5.0"
 ## Bump whenever online messages or game rules change in a way older builds would
 ## misread: the host refuses players whose build speaks a different protocol.
-const PROTOCOL_VERSION := 2
+const PROTOCOL_VERSION := 3
+
+## "Skill throws" (a lobby setting): the most a gently released, shaken shell keeps the
+## face it showed in the hand. Off = every throw has the plain odds. A harder release
+## keeps less (keep x (1 - power)), and quick tosses never keep anything.
+const THROW_SKILL_KEEP := {"off": 0.0, "light": 0.15, "strong": 0.3}
+const DEFAULT_THROW_SKILL := "light"
+## A throw must have been shaken at least this much (ThrowGesture.shaken) to keep any.
+const SKILL_MIN_SHAKE := 0.15
 
 ## Pawn colour choices, in default assignment order.
 const COLORS: Dictionary = {

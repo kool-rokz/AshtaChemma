@@ -27,6 +27,9 @@ enum Mode { OFFLINE, HOST, CLIENT, REPLICA }
 
 @export var game: GameManager
 @export var hud: HUD
+## Optional: the 3D shells. Holding and shaking ends in throw_shells(gesture); every
+## throw is shown there before it's applied. null = throws apply at once.
+@export var shell_stage: ShellStage
 ## Optional: freed when cards are off.
 @export var card_manager: CardManager
 @export var mode: Mode = Mode.OFFLINE
@@ -62,6 +65,8 @@ const STAND_IN_PACE := 1.0
 
 ## Host: actions played for absent players (stats, tests).
 var stand_in_actions: int = 0
+## Live shake updates from other players accepted by this copy (stats, tests).
+var shakes_seen: int = 0
 ## Host: seat -> game seconds since that player dropped.
 var _away_time: Dictionary = {}
 ## Host: seats already announced as stood-in for during their current absence.
@@ -83,6 +88,9 @@ func _ready() -> void:
 		if resume.is_empty():
 			game.pre_game_tasks.append(run_draft)
 	hud.roll_button.pressed.connect(throw_shells)
+	if shell_stage:
+		shell_stage.throw_released.connect(throw_shells)
+		shell_stage.shake_changed.connect(send_shake)
 	hud.throw_chip_pressed.connect(select_throw)
 	game.board.tile_clicked.connect(_on_tile_clicked)
 	for pawn in game.get_all_pawns():
@@ -136,8 +144,10 @@ func is_local_turn() -> bool:
 	return local_seat < 0 or local_seat == game.current_player_index
 
 # --- INPUT → INTENTS ---
-func throw_shells() -> bool:
-	return submit(PlayerIntent.throw_shells(acting_seat()))
+## gesture: how the player threw (ShellStage); null = a quick toss (button, bots).
+func throw_shells(gesture: ThrowGesture = null) -> bool:
+	var how := gesture.to_dict() if gesture else {}
+	return submit(PlayerIntent.throw_shells(acting_seat(), how))
 
 func select_throw(index: int) -> bool:
 	return submit(PlayerIntent.select_throw(acting_seat(), index))
@@ -155,6 +165,22 @@ func choose_target(target: Variant) -> bool:
 
 func cancel_card() -> bool:
 	return submit(PlayerIntent.cancel_card(acting_seat()))
+
+## Online: this player's hand while shaking, for the others to watch (cosmetic).
+func send_shake(state: Dictionary) -> void:
+	if mode in [Mode.HOST, Mode.CLIENT] and is_local_turn():
+		net.send_shake(state)
+
+## Someone else's live shaking. Only the player whose turn it is, before they throw;
+## the host checks that before passing it on.
+func receive_shake(seat: int, state: Dictionary) -> void:
+	if seat == local_seat or seat != game.current_player_index 			or game.current_state != GameManager.GameState.WAITING_FOR_ROLL:
+		return
+	shakes_seen += 1
+	if mode == Mode.HOST:
+		net.relay_shake(seat, state)
+	if shell_stage:
+		shell_stage.show_remote_shake(seat, state)
 
 func _on_pawn_clicked(pawn: Pawn) -> void:
 	if Time.get_ticks_msec() - _last_pick_msec < PICK_ECHO_MSEC:
@@ -201,7 +227,9 @@ func _authorize(intent: PlayerIntent, remote: bool) -> bool:
 	var event := {"seq": next_seq, "intent": intent.to_dict()}
 	next_seq += 1
 	if intent.kind == PlayerIntent.Kind.THROW:
-		event["shells"] = Array(game.generate_shells())
+		var gesture := ThrowGesture.from_dict(intent.gesture) if not intent.gesture.is_empty() else null
+		event["shells"] = Array(game.generate_shells(gesture))
+		event["gesture"] = _gesture_for_event(intent)
 	event_created.emit(event)
 	if mode == Mode.HOST:
 		net.broadcast_event(event)
@@ -285,6 +313,14 @@ func _validate_draft(intent: PlayerIntent) -> String:
 		if not id in offer_ids or intent.card_ids.count(id) > 1:
 			return "Card %s wasn't offered." % id
 	return ""
+
+## The throw's look, the same on every copy: the player's checked gesture, or a quick
+## toss, with a seed so every throw looks different.
+func _gesture_for_event(intent: PlayerIntent) -> Dictionary:
+	var gesture := ThrowGesture.from_dict(intent.gesture) if not intent.gesture.is_empty() else ThrowGesture.quick_toss()
+	if gesture.seed_value == 0:
+		gesture.seed_value = randi()
+	return gesture.to_dict()
 
 func _reject(intent: PlayerIntent, reason: String) -> void:
 	intent_rejected.emit(intent, reason)
@@ -389,7 +425,7 @@ func _process_queue() -> void:
 			push_error("MatchController: malformed event %d skipped" % seq)
 		else:
 			await _wait_until_ready(intent)
-			_execute(intent, event)
+			await _execute(intent, event)
 		_queue.pop_front()
 		applied_seq = seq
 		event_applied.emit(event)
@@ -424,6 +460,9 @@ func _execute(intent: PlayerIntent, event: Dictionary) -> void:
 		PlayerIntent.Kind.THROW:
 			var shells: Array[bool] = []
 			shells.assign(Array(event.get("shells", [])).map(func(v): return bool(v)))
+			if shell_stage:
+				# Seen landing first; the throw counts once it has come to rest
+				await shell_stage.show_throw(intent.player, ThrowGesture.from_dict(event.get("gesture", {})), game.preview_throw(shells))
 			game.apply_throw(shells)
 		PlayerIntent.Kind.SELECT_THROW:
 			game.select_throw(intent.index)

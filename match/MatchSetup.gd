@@ -11,14 +11,17 @@ const GAME_SCENE_PATH := "res://MainGame.tscn"
 var players: Array[Dictionary] = []
 ## Experimental card layer (cards/CardManager). false = the plain game.
 var cards_enabled: bool = false
+## "Skill throws": a key of GameConfig.THROW_SKILL_KEEP.
+var throw_skill: String = GameConfig.DEFAULT_THROW_SKILL
 ## Rejoin: a MatchController snapshot to continue from instead of starting a new match.
 var resume: Dictionary = {}
 
-static func make(player_list: Array, cards: bool = false) -> MatchSetup:
+static func make(player_list: Array, cards: bool = false, skill: String = GameConfig.DEFAULT_THROW_SKILL) -> MatchSetup:
 	var setup := MatchSetup.new()
 	for p in player_list:
 		setup.players.append({"name": String(p["name"]), "color_name": String(p["color_name"])})
 	setup.cards_enabled = cards
+	setup.throw_skill = skill if GameConfig.THROW_SKILL_KEEP.has(skill) else "off"
 	return setup
 
 ## Default for running MainGame.tscn on its own (F6): two local players, no cards.

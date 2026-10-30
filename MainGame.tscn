@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://cards/CardManager.gd" id="5_cards"]
 [ext_resource type="Resource" path="res://cards/CardRules.tres" id="6_rules"]
 [ext_resource type="Script" path="res://match/MatchController.gd" id="7_match"]
+[ext_resource type="Script" path="res://shells/ShellStage.gd" id="8_shells"]
 
 [node name="MainGame" type="Node2D" unique_id=1938848503]
 
@@ -27,8 +28,14 @@ game = NodePath("../GameManager")
 hud = NodePath("../HUD")
 rules_config = ExtResource("6_rules")
 
-[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "hud", "card_manager")]
+[node name="ShellStage" type="Node" parent="." node_paths=PackedStringArray("game", "hud")]
+script = ExtResource("8_shells")
+game = NodePath("../GameManager")
+hud = NodePath("../HUD")
+
+[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "hud", "card_manager", "shell_stage")]
 script = ExtResource("7_match")
 game = NodePath("../GameManager")
 hud = NodePath("../HUD")
+shell_stage = NodePath("../ShellStage")
 card_manager = NodePath("../CardManager")

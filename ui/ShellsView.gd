@@ -1,48 +1,86 @@
 class_name ShellsView
 extends Control
 
-## Draws the last cowry throw: open-up shells show their slit mouth,
-## face-down shells show the domed back.
+## The last throw in the side panel, as the same 3D shells that were thrown: four in a
+## row, open-side-up ones ringed in gold. Before a throw they show faint and face down.
+## ShellStage flies the thrown shells into slot_screen_positions(), hidden here until
+## they arrive (revealed = false), so the hand-over is seamless.
 
-const SHELL_SIZE := Vector2(26, 38)
-const GAP := 14.0
-const OPEN_COLOR := Color(0.97, 0.94, 0.86)
-const BACK_COLOR := Color(0.62, 0.47, 0.32)
-const OUTLINE_COLOR := Color(0.2, 0.15, 0.1)
+const SIZE := Vector2(184, 60)
+const SLOT_GAP := 44.0
+## Hovering spins the shells slowly so both sides can be seen.
+const HOVER_SPIN := 1.2
 
 var shells: Array[bool] = []:
 	set(value):
 		shells = value
-		queue_redraw()
+		_refresh()
+
+## false while ShellStage is still flying the shells here.
+var revealed: bool = true:
+	set(value):
+		revealed = value
+		_refresh()
+
+var _shells_3d: Array[MeshInstance3D] = []
+var _rings: Array[MeshInstance3D] = []
+var _hovered: bool = false
+var _spin: float = 0.0
+
+func _init() -> void:
+	custom_minimum_size = SIZE
+	size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	mouse_entered.connect(func(): _hovered = true)
+	mouse_exited.connect(func(): _hovered = false)
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(4 * SHELL_SIZE.x + 3 * GAP, SHELL_SIZE.y + 4)
-
-func _draw() -> void:
+	var container := SubViewportContainer.new()
+	container.stretch = true
+	container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(container)
+	var viewport := ShellModel.make_viewport()
+	container.add_child(viewport)
+	# Local coordinates: the view's own rect, so slot i sits at _slot_local(i)
+	viewport.add_child(ShellModel.make_camera(Rect2(Vector2.ZERO, SIZE)))
+	ShellModel.add_lighting(viewport)
 	for i in 4:
-		var center := Vector2(SHELL_SIZE.x / 2.0 + i * (SHELL_SIZE.x + GAP), size.y / 2.0)
-		var points := _ellipse(center, SHELL_SIZE / 2.0)
-		if i >= shells.size():
-			# Not thrown yet: faint placeholder
-			draw_polyline(points, Color(1, 1, 1, 0.25), 1.5, true)
-			continue
-		if shells[i]:
-			draw_colored_polygon(points, OPEN_COLOR)
-			# The toothed slit along the shell's mouth
-			var top := center + Vector2(0, -SHELL_SIZE.y * 0.36)
-			var bottom := center + Vector2(0, SHELL_SIZE.y * 0.36)
-			draw_line(top, bottom, OUTLINE_COLOR, 2.5, true)
-			for t in range(1, 6):
-				var y := lerpf(top.y, bottom.y, t / 6.0)
-				draw_line(Vector2(center.x - 4, y), Vector2(center.x + 4, y), OUTLINE_COLOR, 1.0, true)
-		else:
-			draw_colored_polygon(points, BACK_COLOR)
-			draw_circle(center + Vector2(-4, -7), 4.0, Color(1, 1, 1, 0.25))
-		draw_polyline(points, OUTLINE_COLOR, 1.5, true)
+		var shell := ShellModel.make_shell()
+		viewport.add_child(shell)
+		_shells_3d.append(shell)
+		var ring := ShellModel.make_ring()
+		viewport.add_child(ring)
+		_rings.append(ring)
+	_refresh()
 
-func _ellipse(center: Vector2, radius: Vector2) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	for s in 33:
-		var a := TAU * s / 32.0
-		points.append(center + Vector2(cos(a) * radius.x, sin(a) * radius.y))
-	return points
+func _process(delta: float) -> void:
+	if not _hovered and is_zero_approx(_spin):
+		return
+	# Spin while hovered, then ease back to the resting row
+	_spin = _spin + delta * HOVER_SPIN if _hovered else move_toward(fmod(_spin, TAU), 0.0, delta * 3.0)
+	_refresh()
+
+## Where each shell rests, in screen pixels (where ShellStage should land them).
+func slot_screen_positions() -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	for i in 4:
+		result.append(get_global_rect().position + _slot_local(i))
+	return result
+
+func _slot_local(i: int) -> Vector2:
+	return Vector2(SIZE.x / 2.0 + (i - 1.5) * SLOT_GAP, SIZE.y / 2.0)
+
+func _refresh() -> void:
+	if _shells_3d.is_empty():
+		return
+	for i in 4:
+		var thrown := i < shells.size()
+		var open_up := thrown and shells[i]
+		var shell := _shells_3d[i]
+		var pos := ShellModel.screen_to_ground(_slot_local(i), ShellModel.rest_height(open_up))
+		shell.transform = Transform3D(Basis(Vector3.UP, _spin) * ShellModel.resting_basis(open_up, 0.0), pos)
+		shell.material_override = null if thrown else ShellModel.ghost_material()
+		shell.visible = revealed
+		_rings[i].position = Vector3(pos.x, 0.01, pos.z)
+		_rings[i].visible = revealed and open_up

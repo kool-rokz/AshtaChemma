@@ -98,6 +98,7 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	# Lobby: the host's setting and a client's colour change reach everyone
 	host["net"].set_setting("cards", not cards)
 	host["net"].set_setting("cards", cards)
+	host["net"].set_setting("throw_skill", "strong")
 	var taken: String = host["net"].roster[0]["color_name"]
 	machines[1]["net"].request_color(taken) # taken by the host: refused
 	machines[1]["net"].request_color("Green") # free with 2-3 players
@@ -109,6 +110,16 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	host["net"].start_match()
 	if not await _wait(func(): return machines.all(func(m): return m.has("gm") and m["gm"].current_state == GameManager.GameState.WAITING_FOR_ROLL), 10.0, "every copy to start"):
 		return _teardown(machines)
+
+	_check(machines.all(func(m): return m["gm"].setup.throw_skill == "strong"), "the skill-throws setting reaches every copy")
+
+	# Live shaking: only the player whose turn it is is shown (and relayed)
+	machines[1]["net"].send_shake({"holding": true, "pos": [600, 400], "energy": 1.0, "faces": [true, true, true, true]})
+	host["net"].send_shake({"holding": true, "pos": [630, 470], "energy": 0.5, "faces": [false, true, false, true]})
+	await _wait(func(): return machines[1]["ctrl"].shakes_seen >= 1, 5.0, "the host's shaking to reach a client")
+	await get_tree().create_timer(0.3).timeout
+	_check(host["ctrl"].shakes_seen == 0, "the host ignores shaking from a player whose turn it isn't")
+	_check(machines.slice(1).all(func(m): return m["ctrl"].shakes_seen == 1), "clients see only the current player's shaking")
 
 	if cards:
 		var client_cm: CardManager = machines[1]["ctrl"].card_manager
