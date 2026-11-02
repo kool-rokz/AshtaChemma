@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="EmoteData" format=3 uid="uid://cgbnf33ck8j86"]
+
+[ext_resource type="Script" uid="uid://cvuk213iuvxlg" path="res://emotes/EmoteData.gd" id="1_e2c26"]
+
+[resource]
+script = ExtResource("1_e2c26")
+id = &"cheer"
+label = "Cheer"
+gesture = "celebrate"
+voice = "celebrate"
+order = 2

@@ -89,6 +89,8 @@ func _ready() -> void:
 
 func _setup() -> void:
 	Sound.music(MUSIC) # carries on into the match
+	for layer in Sound.MUSIC_LAYERS:
+		Sound.music_layer(layer, 0.0) # calm again after a match
 	Sound.ambience(&"")
 	_net = NetSession.ensure(get_tree())
 	_net.leave() # coming back from a match: start clean

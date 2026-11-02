@@ -23,7 +23,7 @@ static func make(player_list: Array, cards: bool = false, skill: String = GameCo
 	var setup := MatchSetup.new()
 	for p in player_list:
 		setup.players.append({"name": String(p["name"]), "color_name": String(p["color_name"]),
-			"figure": GameConfig.figure_or_default(String(p.get("figure", "")))})
+			"figure": Figures.or_default(String(p.get("figure", "")))})
 	setup.cards_enabled = cards
 	setup.throw_skill = skill if GameConfig.THROW_SKILL_KEEP.has(skill) else "off"
 	setup.draft_mode = draft if draft in GameConfig.DRAFT_MODES else GameConfig.DEFAULT_DRAFT

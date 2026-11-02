@@ -13,7 +13,7 @@ const TEAM_SIZE := 3
 var _figures: Array[PawnFigure] = []
 var _labels: Array[Label3D] = []
 var _homes: Array[Vector3] = []
-var _team_colors := [0, 1] # indices into GameConfig.COLORS
+var _team_colors := [0, 1] # indices into TeamColors.ids()
 var _lights: Dictionary
 var _light := BoardWorld.DUSK
 var _camera: Camera3D
@@ -27,7 +27,7 @@ func _ready() -> void:
 	GameFonts.install()
 	BoardWorld.add_floor(self)
 	_lights = BoardWorld.add_lighting(self, _light)
-	var figures := GameConfig.FIGURES.keys()
+	var figures := Figures.ids()
 	for i in figures.size():
 		var fig := PawnFigure.create(figures[i], _color_for(i))
 		var home := Vector3((i - (figures.size() - 1) / 2.0) * SPACING, 0, 0)
@@ -51,7 +51,7 @@ func _ready() -> void:
 	_build_ui()
 
 func _color_for(i: int) -> String:
-	return GameConfig.COLORS.keys()[_team_colors[0 if i < TEAM_SIZE else 1]]
+	return TeamColors.ids()[_team_colors[0 if i < TEAM_SIZE else 1]]
 
 func _team(team: int) -> Array[PawnFigure]:
 	var out: Array[PawnFigure] = []
@@ -62,7 +62,7 @@ func _team(team: int) -> Array[PawnFigure]:
 
 func _process(_delta: float) -> void:
 	for i in _figures.size():
-		_labels[i].text = "%s\n%s" % [GameConfig.FIGURES[_figures[i].figure], _figures[i].current_animation()]
+		_labels[i].text = "%s\n%s" % [Figures.display_name(_figures[i].figure), _figures[i].current_animation()]
 		_labels[i].position = _figures[i].position + Vector3(0, 0.75, 0)
 
 # --- buttons ---
@@ -115,7 +115,7 @@ func _win() -> void:
 		fig.play(PawnFigure.SAD)
 
 func _cycle_colours() -> void:
-	var count := GameConfig.COLORS.size()
+	var count := TeamColors.all().size()
 	_team_colors = [(_team_colors[0] + 1) % count, (_team_colors[1] + 1) % count]
 	for i in _figures.size():
 		_figures[i].paint(_color_for(i))

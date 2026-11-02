@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_k3yc5"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/card_land.ogg" id="2_a6euv"]
+
+[resource]
+script = ExtResource("1_k3yc5")
+id = &"card_land"
+streams = Array[AudioStream]([ExtResource("2_a6euv")])

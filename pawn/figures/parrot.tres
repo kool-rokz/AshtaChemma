@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="FigureData" format=3]
+
+[ext_resource type="PackedScene" path="res://assets/pawns/parrot.glb" id="1_dcr7s"]
+[ext_resource type="Script" path="res://pawn/FigureData.gd" id="2_jd7nr"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/attack.ogg" id="3_ksu5a"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/celebrate.ogg" id="4_di4wj"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/idle.ogg" id="5_pci8a"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/laugh.ogg" id="6_mtcwg"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/plead.ogg" id="7_er41s"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/relief.ogg" id="8_el405"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/sad.ogg" id="9_uf3q8"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/parrot/taunt.ogg" id="10_m1ok6"]
+
+[resource]
+script = ExtResource("2_jd7nr")
+id = &"parrot"
+display_name = "Parrot"
+model = ExtResource("1_dcr7s")
+order = 2
+voices = Dictionary[StringName, AudioStream]({
+&"attack": ExtResource("3_ksu5a"),
+&"celebrate": ExtResource("4_di4wj"),
+&"idle": ExtResource("5_pci8a"),
+&"laugh": ExtResource("6_mtcwg"),
+&"plead": ExtResource("7_er41s"),
+&"relief": ExtResource("8_el405"),
+&"sad": ExtResource("9_uf3q8"),
+&"taunt": ExtResource("10_m1ok6")
+})

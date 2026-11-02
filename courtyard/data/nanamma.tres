@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="VillagerData" format=3 uid="uid://nfyxepb18y7t"]
+
+[ext_resource type="PackedScene" uid="uid://d223hpo3k3ug5" path="res://assets/villagers/nanamma.glb" id="1_sxcab"]
+[ext_resource type="Script" uid="uid://bjf7mvre6lerv" path="res://courtyard/VillagerData.gd" id="2_a43k6"]
+[ext_resource type="Resource" path="res://sound/cues/villager_clap.tres" id="cue_0"]
+[ext_resource type="Resource" path="res://sound/cues/nanamma_tsk.tres" id="cue_1"]
+
+[resource]
+script = ExtResource("2_a43k6")
+id = &"nanamma"
+display_name = "Nanamma"
+model = ExtResource("1_sxcab")
+spot = 1
+scale = 1.6
+reactions = Dictionary[StringName, String]({
+&"big_throw": "celebrate",
+&"capture": "gasp",
+&"forfeit": "gasp",
+&"gate": "celebrate",
+&"home": "celebrate",
+&"near_miss": "laugh",
+&"win": "celebrate"
+})
+sounds = Dictionary[StringName, Resource]({
+&"celebrate": ExtResource("cue_0"),
+&"gasp": ExtResource("cue_1")
+})

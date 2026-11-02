@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="TeamColorData" format=3 uid="uid://buaojdfiyrc3a"]
+
+[ext_resource type="Script" uid="uid://cdortdfw1nqpg" path="res://pawn/TeamColorData.gd" id="1_rqfy6"]
+
+[resource]
+script = ExtResource("1_rqfy6")
+id = &"Red"
+display_name = "Red"
+ui = Color(0.91, 0.3, 0.24, 1)
+base = Color(0.8, 0.16, 0.09, 1)
+accent = Color(0.95, 0.7, 0.12, 1)

@@ -11,6 +11,7 @@ extends CanvasLayer
 ##     shells (ShellStage). `throw_allowed` says when this screen may throw.
 ##   - the newest event as a toast, and the full log on a palm-leaf scroll (Log / Tab)
 ##   - the winner / notice overlay
+##   - the emote wheel (EmoteWheel, bottom left): emote_pressed(id) for MatchController
 ##   - the Menu (MatchMenu: volume, Leave match), from its button, Esc, F10 or pad Start;
 ##     no throwing while it's open
 ## Board highlights come from its BoardPresenter; keyboard / pad picking from its
@@ -35,6 +36,8 @@ const OVERLAY_LAYER := 20
 signal throw_chip_pressed(index: int)
 ## throw_allowed changed.
 signal throw_allowed_changed(allowed: bool)
+## The player picked an emote (Emotes id); MatchController sends it.
+signal emote_pressed(emote_id: String)
 
 ## The match this HUD shows (binds once its players exist).
 @export var game: GameManager
@@ -68,6 +71,7 @@ var _log_panel: PanelContainer
 var _log: RichTextLabel
 var _log_open := false
 var _menu: MatchMenu
+var _emotes: EmoteWheel
 var _menu_button: Button
 var _winner_overlay: Control
 var _winner_label: Label
@@ -88,6 +92,10 @@ func _init() -> void:
 	_build_throw_panel()
 	_build_toast_and_log()
 	_build_winner_overlay()
+	_emotes = EmoteWheel.new()
+	_emotes.name = "EmoteWheel"
+	_emotes.chosen.connect(emote_pressed.emit)
+	_root.add_child(_emotes)
 	_menu = MatchMenu.new()
 	_menu.name = "MatchMenu"
 	add_child(_menu)
@@ -183,7 +191,7 @@ func _build_badges() -> void:
 
 ## Pips for pawns home, a padlock while the inner ring is closed, and card backs held.
 func _draw_badge_marks(marks: Control, player: int) -> void:
-	var color: Color = GameConfig.lacquer_of(_gm.players[player].get("color_name", "Red"))["base"]
+	var color: Color = TeamColors.of(_gm.players[player].get("color_name", "")).base
 	var home := _gm.count_pawns_home(player)
 	for i in GameConfig.PAWNS_PER_PLAYER:
 		var c := Vector2(7 + i * 15, 10)
@@ -283,6 +291,7 @@ func _layout() -> void:
 	var log_button: Button = _log_panel.get_meta("button")
 	log_button.position = Vector2(screen.x - MARGIN - 64, 14)
 	_menu_button.position = Vector2(log_button.position.x - 10 - 76, 14)
+	_emotes.place(Vector2(MARGIN, screen.y - MARGIN))
 	_log_panel.size = Vector2(LOG_WIDTH, screen.y - 66 - _throw_panel.size.y - MARGIN * 2.0)
 	_log_panel.position = Vector2(screen.x - MARGIN - LOG_WIDTH if _log_open else screen.x + 10, 64)
 
@@ -486,7 +495,7 @@ func _refresh_players() -> void:
 		if _disconnected.has(i):
 			tags += " (away)"
 		badge["name"].text = _gm.get_player_name(i) + tags
-		var color: Color = GameConfig.lacquer_of(_gm.players[i].get("color_name", "Red"))["base"]
+		var color: Color = TeamColors.of(_gm.players[i].get("color_name", "")).base
 		(badge["panel"] as PanelContainer).add_theme_stylebox_override("panel",
 			HudStyle.panel(color if is_turn else Color(HudStyle.BORDER, 0.45), 3 if is_turn else 1))
 		(badge["panel"] as PanelContainer).modulate = Color(1, 1, 1, 0.55 if _disconnected.has(i) else 1.0)

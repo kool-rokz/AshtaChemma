@@ -1,7 +1,8 @@
 extends SceneTree
 
 ## GameManager.get_near_misses: an opponent's pawn one step short of or past the mover
-## (along the mover's own path), on a square where it could have been captured.
+## (along the mover's own path), on a square where it could have been captured; and
+## GameManager.get_threats: which throw values would capture a pawn.
 ## Run: godot --headless --path . -s res://tests/NearMissTest.gd
 
 var failures := 0
@@ -56,6 +57,18 @@ func _run() -> void:
 	other.current_tile_index = gm.get_homebase_tile(1)
 	mate.current_tile_index = path[k + 2]
 	_check(gm.get_near_misses(mover).is_empty(), "a teammate next to the mover is no near miss")
+
+	# Danger (get_threats): which throws of an opponent would capture a pawn
+	mate.current_tile_index = gm.get_homebase_tile(0)
+	mover.current_tile_index = path[k]
+	other.current_tile_index = path[k + 2]
+	var threats := gm.get_threats()
+	_check(threats.has(other) and 2 in threats[other], "a pawn 2 steps ahead of an opponent is in danger from a 2 (got %s)" % str(threats.get(other)))
+	_check(not threats.has(mover), "the mover isn't threatened by a pawn behind it on its own path")
+	if s >= 0:
+		mover.current_tile_index = path[s - 1] if s > 0 else path[s]
+		other.current_tile_index = path[s + 1]
+		_check(not gm.get_threats().has(other), "a pawn on a safe square is never in danger")
 
 	main.queue_free()
 	await process_frame

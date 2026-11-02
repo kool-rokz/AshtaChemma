@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_x4fgm"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/throw_chamma.ogg" id="2_bstaj"]
+
+[resource]
+script = ExtResource("1_x4fgm")
+id = &"throw_chamma"
+streams = Array[AudioStream]([ExtResource("2_bstaj")])

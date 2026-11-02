@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_nr1te"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/pawn_sent_home.ogg" id="2_ibu2m"]
+
+[resource]
+script = ExtResource("1_nr1te")
+id = &"pawn_sent_home"
+streams = Array[AudioStream]([ExtResource("2_ibu2m")])

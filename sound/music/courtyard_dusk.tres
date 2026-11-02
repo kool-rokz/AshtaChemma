@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="MusicTrack" format=3]
+
+[ext_resource type="AudioStream" path="res://assets/audio/music/courtyard_dusk_race.ogg" id="1_5qg45"]
+[ext_resource type="AudioStream" path="res://assets/audio/music/courtyard_dusk_danger.ogg" id="2_jlsr3"]
+[ext_resource type="Script" path="res://sound/MusicTrack.gd" id="3_w32vf"]
+[ext_resource type="AudioStream" path="res://assets/audio/music/courtyard_dusk.ogg" id="4_rn2sq"]
+
+[resource]
+script = ExtResource("3_w32vf")
+id = &"courtyard_dusk"
+stream = ExtResource("4_rn2sq")
+layers = Dictionary[StringName, AudioStream]({
+&"danger": ExtResource("2_jlsr3"),
+&"race": ExtResource("1_5qg45")
+})

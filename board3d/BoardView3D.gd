@@ -15,7 +15,11 @@ extends Node3D
 ##     BoardPresenter work unchanged. Touch has no hover, so the first tap on a pawn or
 ##     square that can be picked previews it and a second tap picks it. Keyboard and pad
 ##     players pick with PadCursor; the square in focus gets a chalk ring.
-##   - reactions: attack / celebrate / sad (see PawnFigure), from GameManager's signals.
+##   - reactions: attack / celebrate / sad (see PawnFigure), from GameManager's signals;
+##     players' emotes (MatchController.emote_shown) acted out by their figures with a
+##     phrase above them; automatic taunts (the spared team jeers after a near miss, a
+##     capturer gloats); figures an opponent could capture next throw look nervous
+##     (Tension); a 4 or 8 makes the lamp flare and the crickets hush.
 ## Disabled when headless (tests), like every view.
 
 @export var game: GameManager
@@ -66,6 +70,8 @@ var _view := {"pitch": PITCH, "yaw": 0.0, "distance": DISTANCE}
 var _view_tween: Tween
 var _side := -1
 var _hovered_pawn: Pawn
+var _tension: Tension
+var _courtyard: Courtyard
 ## Pawn -> how high its figure was hopping last frame (a landing makes a step sound).
 var _hop_height: Dictionary = {}
 var _last_hello_msec := 0
@@ -103,10 +109,22 @@ func _ready() -> void:
 	game.roll_result.connect(_on_roll)
 	game.turn_forfeited.connect(_on_forfeited)
 	game.game_over.connect(_on_game_over)
+	game.pawn_reached_home.connect(func(_pawn, _home): _courtyard.moment(&"home"))
+	game.inner_ring_unlocked.connect(func(_player): _courtyard.moment(&"gate"))
+	_courtyard = Courtyard.new()
+	_courtyard.name = "Courtyard"
+	add_child(_courtyard)
 	var input := GameInput.ensure(get_tree())
 	input.changed.connect(func(_device): _sync_marks())
 	Sound.ensure(get_tree())
 	_start_sound.call_deferred()
+	_tension = Tension.new()
+	_tension.name = "Tension"
+	add_child(_tension)
+	_tension.changed.connect(_on_tension)
+	_tension.watch(game)
+	if controller:
+		controller.emote_shown.connect(_on_emote)
 	if not game.players.is_empty():
 		_spawn_figures()
 
@@ -210,6 +228,9 @@ func _spawn_figures() -> void:
 		if not pawn.hovered.is_connected(_on_pawn_hovered):
 			pawn.hovered.connect(_on_pawn_hovered)
 	_face_viewer_side(false)
+	# Online the onlookers sit across from your seat; offline they stay put while the
+	# camera turns between players.
+	_courtyard.face_side(_side if controller and controller.local_seat >= 0 else 0)
 	_process(0.0)
 	_sync_marks()
 
@@ -518,11 +539,15 @@ func _on_captured(attacker: Pawn, victim: Pawn) -> void:
 	_figures[attacker].play(PawnFigure.ATTACK)
 	_figures[victim].play(PawnFigure.SAD)
 	Sound.play(&"pawn_capture")
+	_courtyard.moment(&"capture")
 	_push_in()
 	_animating[victim] = true
 	await get_tree().create_timer(0.45).timeout
 	await _knock_home(victim)
 	cheer(attacker.team_id, &"celebrate_capture")
+	await get_tree().create_timer(1.4).timeout
+	if _figures.has(attacker) and not game.is_game_finished():
+		(_figures[attacker] as PawnFigure).gesture("taunt") # rubbing it in
 
 ## The whole team cheers together (their figures' voices as a chorus) with the moment's
 ## own cue: a capture's drum flourish, an escape's sigh of relief...
@@ -542,9 +567,72 @@ func _on_pawn_moved(pawn: Pawn, _from_tile: int, _to_tile: int, _steps: int) -> 
 		return
 	await get_tree().create_timer(0.25).timeout
 	Sound.play(&"near_miss")
+	_courtyard.moment(&"near_miss")
 	for team in teams:
 		for fig in _team_figures(team):
 			(fig as PawnFigure).relieve(randf() * 0.12)
+	await get_tree().create_timer(1.5).timeout
+	if game.is_game_finished():
+		return
+	for team in teams:
+		for fig in _team_figures(team):
+			(fig as PawnFigure).gesture("taunt", "taunt", randf() * 0.15) # "missed me!"
+
+## Danger changed (Tension): the figures an opponent could capture next throw fidget
+## and glance round, more the likelier it is.
+func _on_tension(danger: Dictionary, _race: float) -> void:
+	for pawn: Pawn in _figures:
+		(_figures[pawn] as PawnFigure).set_nervous(minf(1.0, float(danger.get(pawn, 0.0)) * 1.6))
+
+## A player's emote: all their figures act it out (a moment apart, like a chorus), and
+## a phrase floats up over the one furthest along.
+func _on_emote(seat: int, emote_id: String) -> void:
+	var emote := Emotes.find(emote_id)
+	var team := _team_figures(seat)
+	if emote == null or team.is_empty():
+		return
+	for fig in team:
+		(fig as PawnFigure).gesture(emote.gesture, emote.voice, randf() * 0.15)
+	var lead: PawnFigure = team[0]
+	var best := -1
+	for pawn: Pawn in _figures:
+		if pawn.team_id == seat and game.get_path_step(pawn) > best:
+			best = game.get_path_step(pawn)
+			lead = _figures[pawn]
+	_bubble(lead, emote.phrase, emote.reading if emote.reading != "" else emote.label,
+		game.get_player_color(seat).lightened(0.3))
+
+## Words floating up from a figure: an optional Telugu line over its reading.
+func _bubble(fig: Node3D, telugu: String, reading: String, color: Color) -> void:
+	var holder := Node3D.new()
+	holder.position = fig.position + Vector3.UP * 0.85
+	add_child(holder)
+	var lines := []
+	if telugu != "":
+		lines.append([telugu, GameFonts.telugu(), 84, 0.3])
+	lines.append([reading, GameFonts.title(), 60, 0.0])
+	for line in lines:
+		var label := Label3D.new()
+		label.text = line[0]
+		label.font = line[1]
+		label.font_size = line[2]
+		label.pixel_size = 0.0034
+		label.modulate = color
+		label.outline_modulate = Color(0.1, 0.05, 0.02)
+		label.outline_size = 14
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.position.y = line[3]
+		holder.add_child(label)
+	var t := holder.create_tween()
+	t.tween_property(holder, "position:y", holder.position.y + 0.45, 2.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_method(_fade_bubble.bind(holder), 1.0, 0.0, 2.2).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
+	t.tween_callback(holder.queue_free)
+
+func _fade_bubble(alpha: float, holder: Node3D) -> void:
+	for label: Label3D in holder.get_children():
+		label.modulate.a = alpha
+		label.outline_modulate.a = alpha
 
 ## Pointing at (or pad-focusing) a pawn that can be picked: its figure says hello.
 func _on_pawn_hovered(pawn: Pawn) -> void:
@@ -576,6 +664,9 @@ func _on_swapped(a: Pawn, b: Pawn) -> void:
 
 func _on_roll(value: int) -> void:
 	if value in GameManager.BONUS_THROWS:
+		BoardWorld.flare_lamp(_lights) # the lamp flares, the crickets hush
+		Sound.duck_ambience(3.5)
+		_courtyard.moment(&"big_throw")
 		# Wait a frame: if this was the third 4/8 in a row the throws are lost instead
 		_celebrate_player = game.current_player_index
 		_flush_celebration.call_deferred()
@@ -588,10 +679,12 @@ func _flush_celebration() -> void:
 
 func _on_forfeited(player: int, _values: Array[int]) -> void:
 	_celebrate_player = -1
+	_courtyard.moment(&"forfeit")
 	for fig in _team_figures(player):
 		fig.play(PawnFigure.SAD)
 
 func _on_game_over(winner: int) -> void:
 	_push_in()
+	_courtyard.moment(&"win")
 	for pawn: Pawn in _figures:
 		_figures[pawn].play(PawnFigure.CELEBRATE if pawn.team_id == winner else PawnFigure.SAD)

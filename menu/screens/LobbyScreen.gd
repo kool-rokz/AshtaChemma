@@ -198,7 +198,7 @@ func _gather() -> void:
 		var seat := int(entry["seat"])
 		entries.append({"seat": seat, "side": sides[seat] if seat < sides.size() else seat % 4,
 			"name": entry["name"], "color_name": entry["color_name"],
-			"figure": GameConfig.figure_or_default(String(entry.get("figure", "")))})
+			"figure": Figures.or_default(String(entry.get("figure", "")))})
 	stage.show_gathering(entries)
 
 func _player_row(entry: Dictionary) -> HBoxContainer:
@@ -206,7 +206,7 @@ func _player_row(entry: Dictionary) -> HBoxContainer:
 	row.add_theme_constant_override("separation", 12)
 	var dot := Panel.new()
 	var style := StyleBoxFlat.new()
-	style.bg_color = GameConfig.lacquer_of(entry["color_name"])["base"]
+	style.bg_color = TeamColors.of(entry["color_name"]).base
 	style.set_corner_radius_all(11)
 	dot.add_theme_stylebox_override("panel", style)
 	dot.custom_minimum_size = Vector2(22, 22)
@@ -219,7 +219,7 @@ func _player_row(entry: Dictionary) -> HBoxContainer:
 		tags.append("you")
 	if not entry["connected"]:
 		tags.append("away")
-	var figure: String = GameConfig.FIGURES.get(entry.get("figure", ""), "")
+	var figure := Figures.display_name(entry.get("figure", ""))
 	var text: String = entry["name"] + ("  · " + figure if figure != "" else "") \
 		+ ("  (%s)" % ", ".join(tags) if not tags.is_empty() else "")
 	var name_label := MenuStyle.label(text, 18)
@@ -237,7 +237,7 @@ func _refresh_pots() -> void:
 		_pots.remove_child(child)
 		child.queue_free()
 	var mine: String = net.local_entry().get("color_name", "")
-	for color_name in GameConfig.COLORS:
+	for color_name in TeamColors.ids():
 		var taken: bool = net.roster.any(func(e): return e["color_name"] == color_name and e["seat"] != net.local_seat)
 		var pot := _pot(color_name, color_name == mine, taken)
 		_pots.add_child(pot)
@@ -247,14 +247,14 @@ func _refresh_pots() -> void:
 func _pot(color_name: String, mine: bool, taken: bool) -> Button:
 	var pot := Button.new()
 	pot.name = "Color" + color_name
-	pot.tooltip_text = color_name + (" (taken)" if taken else "")
+	pot.tooltip_text = TeamColors.of(color_name).display_name + (" (taken)" if taken else "")
 	pot.custom_minimum_size = Vector2(52, 52)
 	pot.disabled = taken
 	pot.focus_mode = Control.FOCUS_ALL
 	pot.pressed.connect(func():
 		Sound.play(&"ui_click")
 		net.request_color(color_name))
-	var lacquer: Color = GameConfig.lacquer_of(color_name)["base"]
+	var lacquer: Color = TeamColors.of(color_name).base
 	for state in ["normal", "hover", "pressed", "disabled"]:
 		var style := StyleBoxFlat.new()
 		style.bg_color = lacquer if not taken else lacquer.darkened(0.7)

@@ -131,6 +131,19 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 		_check(client_cm.hands[0].all(func(c): return c == null) and client_cm.hands[0].size() == 5, "a client can't see the host's cards")
 		_check(host["ctrl"].card_manager.hands[1].all(func(c): return c != null), "the host knows every hand (it's the referee)")
 
+	# Emotes: anyone, any time; through the host to everyone else; spam dropped
+	var emotes_seen: Array = []
+	for m in machines:
+		m["ctrl"].emote_shown.connect(func(seat: int, id: String): emotes_seen.append([m["net"].local_seat, seat, id]))
+	_check(machines[1]["ctrl"].send_emote("taunt"), "a client can send an emote on someone else's turn")
+	_check(not machines[1]["ctrl"].send_emote("laugh"), "a second emote straight away is refused (cooldown)")
+	_check(not machines[1]["ctrl"].send_emote("not_an_emote"), "an unknown emote is refused")
+	await _wait(func(): return emotes_seen.size() >= players, 5.0, "the emote to reach every player")
+	_check(emotes_seen.all(func(e): return e[1] == 1 and e[2] == "taunt"), "everyone sees seat 1's taunt, once each (got %s)" % str(emotes_seen))
+	machines[1]["net"]._rpc_taunt.rpc_id(1, "laugh") # a client skipping its own cooldown: the host drops it
+	await get_tree().create_timer(0.5).timeout
+	_check(emotes_seen.size() == players, "the host drops emotes sent too fast")
+
 	# Out of turn: seat 1 tries to throw on seat 0's turn
 	var rejections: Array = []
 	machines[1]["net"].intent_rejected.connect(func(_intent, reason): rejections.append(reason))

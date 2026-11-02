@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="EmoteData" format=3 uid="uid://c6nnbvc5kx4sf"]
+
+[ext_resource type="Script" uid="uid://cvuk213iuvxlg" path="res://emotes/EmoteData.gd" id="1_buo6d"]
+
+[resource]
+script = ExtResource("1_buo6d")
+id = &"chamma"
+label = "Chamma!"
+gesture = "celebrate"
+voice = "celebrate"
+phrase = "చమ్మా!"
+reading = "Chamma!"
+order = 5

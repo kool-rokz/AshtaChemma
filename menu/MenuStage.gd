@@ -2,7 +2,7 @@ class_name MenuStage
 extends Node3D
 
 ## The courtyard behind the menu: the chalk board on the mud at dusk or dawn, the lamp,
-## and the Kondapalli figures. A view the menu shell and screens drive through these
+## the Kondapalli figures and the villagers watching (Courtyard). A view the menu shell and screens drive through these
 ## calls only, so another stage (2D art, a lighter one for small devices) can replace it:
 ##   show_lineup(figure)     all six figures in a row, the player's choice stepped forward
 ##   show_gathering(entries) the lobby: each player's figure at their side of the board
@@ -57,8 +57,11 @@ func _ready() -> void:
 	camera.make_current()
 	_lesson_root = Node3D.new()
 	add_child(_lesson_root)
-	var colors := GameConfig.COLORS.keys()
-	var figures := GameConfig.FIGURES.keys()
+	var courtyard := Courtyard.new()
+	courtyard.name = "Courtyard"
+	add_child(courtyard)
+	var colors := TeamColors.ids()
+	var figures := Figures.ids()
 	for i in figures.size():
 		var fig := PawnFigure.create(figures[i], colors[i % colors.size()])
 		fig.position = _lineup_position(i, figures.size())
@@ -176,7 +179,7 @@ func _arrive(seat: int, entry: Dictionary, key: Array) -> void:
 	name_label.font = GameFonts.title()
 	name_label.font_size = 40
 	name_label.pixel_size = 0.0028
-	name_label.modulate = GameConfig.lacquer_of(String(entry["color_name"]))["base"].lightened(0.25)
+	name_label.modulate = TeamColors.of(String(entry["color_name"])).base.lightened(0.25)
 	name_label.outline_modulate = Color(0.1, 0.05, 0.02)
 	name_label.outline_size = 12
 	name_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED

@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="VillagerData" format=3 uid="uid://dtk4onvsuy3vq"]
+
+[ext_resource type="PackedScene" uid="uid://csdu25yhd1w8y" path="res://assets/villagers/chitti.glb" id="1_eijqp"]
+[ext_resource type="Script" uid="uid://bjf7mvre6lerv" path="res://courtyard/VillagerData.gd" id="2_v43wg"]
+
+[resource]
+script = ExtResource("2_v43wg")
+id = &"chitti"
+display_name = "Chitti"
+model = ExtResource("1_eijqp")
+spot = 2
+scale = 2.2
+reactions = Dictionary[StringName, String]({
+&"big_throw": "celebrate",
+&"capture": "gasp",
+&"forfeit": "gasp",
+&"gate": "celebrate",
+&"home": "celebrate",
+&"near_miss": "laugh",
+&"win": "celebrate"
+})

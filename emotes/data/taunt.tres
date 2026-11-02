@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="EmoteData" format=3 uid="uid://birl08qwhawv8"]
+
+[ext_resource type="Script" uid="uid://cvuk213iuvxlg" path="res://emotes/EmoteData.gd" id="1_yvrvf"]
+
+[resource]
+script = ExtResource("1_yvrvf")
+id = &"taunt"
+label = "Taunt"
+gesture = "taunt"
+voice = "taunt"

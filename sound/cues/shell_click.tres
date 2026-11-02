@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_2wnoc"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_1.ogg" id="2_v1gcg"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_2.ogg" id="3_6xqq0"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_3.ogg" id="4_yiwye"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_4.ogg" id="5_3blkb"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_5.ogg" id="6_43jc4"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_click_6.ogg" id="7_jy0sb"]
+
+[resource]
+script = ExtResource("1_2wnoc")
+id = &"shell_click"
+streams = Array[AudioStream]([ExtResource("2_v1gcg"), ExtResource("3_6xqq0"), ExtResource("4_yiwye"), ExtResource("5_3blkb"), ExtResource("6_43jc4"), ExtResource("7_jy0sb")])

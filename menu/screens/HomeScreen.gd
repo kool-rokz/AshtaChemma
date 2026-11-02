@@ -79,13 +79,13 @@ func on_figure_clicked(figure: String) -> void:
 	_set_figure(figure)
 
 static func saved_figure() -> String:
-	return GameConfig.figure_or_default(Settings.get_value(Settings.PLAYER, Settings.FIGURE, ""))
+	return Figures.or_default(Settings.get_value(Settings.PLAYER, Settings.FIGURE, ""))
 
 func _figure() -> String:
 	return saved_figure()
 
 func _step_figure(step: int) -> void:
-	var ids: Array = GameConfig.FIGURES.keys()
+	var ids := Figures.ids()
 	_set_figure(ids[wrapi(ids.find(_figure()) + step, 0, ids.size())])
 
 func _set_figure(figure: String) -> void:
@@ -96,6 +96,6 @@ func _set_figure(figure: String) -> void:
 	_show_figure(true)
 
 func _show_figure(react: bool) -> void:
-	_figure_label.text = GameConfig.FIGURES[_figure()]
+	_figure_label.text = Figures.display_name(_figure())
 	if react:
 		stage.select_figure(_figure())

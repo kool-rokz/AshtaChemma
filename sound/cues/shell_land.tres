@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_mtqiu"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_land_1.ogg" id="2_xx4ir"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_land_2.ogg" id="3_am3cj"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_land_3.ogg" id="4_f0t37"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/shell_land_4.ogg" id="5_pequm"]
+
+[resource]
+script = ExtResource("1_mtqiu")
+id = &"shell_land"
+streams = Array[AudioStream]([ExtResource("2_xx4ir"), ExtResource("3_am3cj"), ExtResource("4_f0t37"), ExtResource("5_pequm")])

@@ -22,6 +22,8 @@ signal event_created(event: Dictionary)
 ## Any copy: an event has been applied.
 signal event_applied(event: Dictionary)
 signal intent_rejected(intent: PlayerIntent, reason: String)
+## Any copy: a player sent an emote (cosmetic; never part of the game's events).
+signal emote_shown(seat: int, emote_id: String)
 
 enum Mode { OFFLINE, HOST, CLIENT, REPLICA }
 
@@ -73,6 +75,8 @@ const AUTO_MOVE_DELAY := 0.6
 var stand_in_actions: int = 0
 ## Live shake updates from other players accepted by this copy (stats, tests).
 var shakes_seen: int = 0
+## Seat -> when that player's last emote was shown (msec), for Emotes.COOLDOWN.
+var _last_emote: Dictionary = {}
 ## Host: seat -> game seconds since that player dropped.
 var _away_time: Dictionary = {}
 ## Host: seats already announced as stood-in for during their current absence.
@@ -97,6 +101,7 @@ func _ready() -> void:
 		shell_stage.throw_released.connect(throw_shells)
 		shell_stage.shake_changed.connect(send_shake)
 	hud.throw_chip_pressed.connect(select_throw)
+	hud.emote_pressed.connect(func(emote_id: String): send_emote(emote_id))
 	game.movable_pawns_changed.connect(func(_pawns): _auto_move.call_deferred())
 	game.board.tile_clicked.connect(_on_tile_clicked)
 	for pawn in game.get_all_pawns():
@@ -171,6 +176,34 @@ func choose_target(target: Variant) -> bool:
 
 func cancel_card() -> bool:
 	return submit(PlayerIntent.cancel_card(acting_seat()))
+
+# --- EMOTES (cosmetic: shown on every screen, never part of the game's events) ---
+## This screen's player sends an emote (an EmoteData id). Shown here at once; online it
+## goes through the host, which drops emotes sent faster than Emotes.COOLDOWN.
+func send_emote(emote_id: String) -> bool:
+	var seat := acting_seat()
+	if not Emotes.has(emote_id) or not _emote_ready(seat):
+		return false
+	_last_emote[seat] = Time.get_ticks_msec()
+	if mode in [Mode.HOST, Mode.CLIENT]:
+		net.send_taunt(emote_id)
+	emote_shown.emit(seat, emote_id)
+	return true
+
+## Another player's emote (from the network).
+func receive_emote(seat: int, emote_id: String) -> void:
+	if seat == local_seat or seat < 0 or seat >= game.players.size() or not Emotes.has(emote_id):
+		return
+	if mode == Mode.HOST:
+		if not _emote_ready(seat):
+			return # too fast: dropped, and not passed on
+		_last_emote[seat] = Time.get_ticks_msec()
+		net.relay_taunt(seat, emote_id)
+	emote_shown.emit(seat, emote_id)
+
+func _emote_ready(seat: int) -> bool:
+	# A little slack for network timing
+	return Time.get_ticks_msec() - int(_last_emote.get(seat, -100000)) >= int(Emotes.COOLDOWN * 900.0)
 
 ## Online: this player's hand while shaking, for the others to watch (cosmetic).
 func send_shake(state: Dictionary) -> void:

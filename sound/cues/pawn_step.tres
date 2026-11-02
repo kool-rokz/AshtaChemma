@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="SoundCue" format=3]
+
+[ext_resource type="Script" path="res://sound/SoundCue.gd" id="1_ngc2c"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/pawn_step_1.ogg" id="2_23oso"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/pawn_step_2.ogg" id="3_bll7w"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/pawn_step_3.ogg" id="4_og6qf"]
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/pawn_step_4.ogg" id="5_m28vx"]
+
+[resource]
+script = ExtResource("1_ngc2c")
+id = &"pawn_step"
+streams = Array[AudioStream]([ExtResource("2_23oso"), ExtResource("3_bll7w"), ExtResource("4_og6qf"), ExtResource("5_m28vx")])

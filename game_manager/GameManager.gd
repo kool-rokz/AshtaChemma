@@ -67,6 +67,8 @@ var current_state: GameState = GameState.TURN_START
 const PAWN_SCENE_PATH := "res://pawn/Pawn.tscn"
 ## Throws of 4 (chamma) and 8 (ashta) earn another throw before moving.
 const BONUS_THROWS: Array[int] = [4, 8]
+## Every value a throw of four cowries can give.
+const THROW_VALUES: Array[int] = [1, 2, 3, 4, 8]
 ## Throwing a bonus value this many times in a row forfeits the whole pool.
 const MAX_BONUS_CHAIN := 3
 ## Pause so players can read "exhausted"/"forfeited" before the turn passes.
@@ -730,6 +732,29 @@ func get_near_misses(mover: Pawn) -> Array[Pawn]:
 			if pawn.team_id != mover.team_id and _can_capture(mover, pawn, tile) and not result.has(pawn):
 				result.append(pawn)
 	return result
+
+## Danger: each pawn an opponent could capture with a single throw, and which throw
+## values would do it ({Pawn: [values]}). Uses the real move rules (locked outer ring,
+## exact paths, card modifiers, safe squares, protection). Read-only; views use it to
+## make pawns nervous and the music tense.
+func get_threats() -> Dictionary:
+	var threats := {}
+	for attacker in get_all_pawns():
+		var path := _get_path(attacker)
+		for value in THROW_VALUES:
+			var sequence := _get_step_sequence(attacker, value)
+			if sequence.is_empty():
+				continue
+			var tile: int = path[sequence.back()]
+			if board.is_safe(tile):
+				continue
+			for victim in get_pawns_at_tile(tile):
+				if victim.team_id != attacker.team_id and _can_capture(attacker, victim, tile):
+					var values: Array = threats.get(victim, [])
+					if not value in values:
+						values.append(value)
+					threats[victim] = values
+	return threats
 
 func _get_movable_pawns(roll: int) -> Array[Pawn]:
 	var valid: Array[Pawn] = []

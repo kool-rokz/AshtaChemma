@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="EmoteData" format=3 uid="uid://b57x31f2tb7cl"]
+
+[ext_resource type="Script" uid="uid://cvuk213iuvxlg" path="res://emotes/EmoteData.gd" id="1_1nltg"]
+
+[resource]
+script = ExtResource("1_1nltg")
+id = &"ayyo"
+label = "Ayyo!"
+gesture = "sad"
+voice = "sad"
+phrase = "అయ్యో!"
+reading = "Ayyo!"
+order = 4

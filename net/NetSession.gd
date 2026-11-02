@@ -18,6 +18,8 @@ extends Node
 ##   host -> one      rejected(intent, reason)
 ##   client -> host   shake(state)             live hand while shaking (cosmetic, unreliable)
 ##   host -> others   shake_seen(seat, state)  the same, relayed
+##   client -> host   taunt(id)                an emote (Emotes; the host drops ones sent too fast)
+##   host -> others   taunt_seen(seat, id)     the same, relayed
 ## Messages that arrive before the match scene is ready are buffered.
 ## Mid-match, a client that loses the host reconnects by itself; the host holds its
 ## seat, sends a snapshot once the game is between actions, then events as usual.
@@ -60,9 +62,9 @@ const DEFAULT_SETTINGS := {"cards": true, "throw_skill": GameConfig.DEFAULT_THRO
 var role: Role = Role.NONE
 var local_seat: int = -1
 var local_name: String = ""
-## This player's pawn figure (GameConfig.FIGURES), chosen on the main menu; sent to the
+## This player's pawn figure (a FigureData id, Figures), chosen on the main menu; sent to the
 ## host once welcomed into a room.
-var local_figure: String = GameConfig.FIGURES.keys()[0]
+var local_figure: String = Figures.ids()[0]
 ## Host: [{seat, name, color_name, peer, token, connected, syncing}]. Clients get
 ## {seat, name, color_name, connected}; a rejoining player counts as connected once synced.
 var roster: Array = []
@@ -126,7 +128,7 @@ func host(player_name: String, port: int = DEFAULT_PORT) -> Error:
 	local_seat = 0
 	local_name = player_name
 	roster = [{"seat": 0, "name": player_name, "color_name": _free_color(),
-		"figure": GameConfig.figure_or_default(local_figure), "peer": 1, "token": _new_token(), "connected": true}]
+		"figure": Figures.or_default(local_figure), "peer": 1, "token": _new_token(), "connected": true}]
 	_token = roster[0]["token"]
 	roster_changed.emit(public_roster())
 	return OK
@@ -242,10 +244,10 @@ func _unique_name(wanted: String) -> String:
 	return "%s %d" % [wanted, i]
 
 func _free_color() -> String:
-	for color_name in GameConfig.COLORS:
+	for color_name in TeamColors.ids():
 		if not roster.any(func(entry): return entry["color_name"] == color_name):
 			return color_name
-	return GameConfig.COLORS.keys()[0]
+	return TeamColors.ids()[0]
 
 ## Ends the session: in the lobby the menu shows `reason`, in a match the HUD does.
 func _fail(reason: String) -> void:
@@ -335,7 +337,7 @@ func _rpc_request_color(color_name: String) -> void:
 		_set_color(seat, color_name)
 
 func _set_color(seat: int, color_name: String) -> void:
-	if in_match or not GameConfig.COLORS.has(color_name):
+	if in_match or not TeamColors.has(color_name):
 		return
 	if roster.any(func(e): return e["seat"] != seat and e["color_name"] == color_name):
 		return # taken
@@ -346,7 +348,7 @@ func _set_color(seat: int, color_name: String) -> void:
 
 ## Switch this player's pawn figure (any player may have any figure).
 func request_figure(figure: String) -> void:
-	local_figure = GameConfig.figure_or_default(figure)
+	local_figure = Figures.or_default(figure)
 	if is_host():
 		_set_figure(local_seat, local_figure)
 	elif is_online():
@@ -359,7 +361,7 @@ func _rpc_request_figure(figure: String) -> void:
 		_set_figure(seat, figure)
 
 func _set_figure(seat: int, figure: String) -> void:
-	if in_match or not GameConfig.FIGURES.has(figure):
+	if in_match or not Figures.has(figure):
 		return
 	for entry in roster:
 		if entry["seat"] == seat:
@@ -396,7 +398,7 @@ func _rpc_hello(player_name: String, token: String, protocol: int) -> void:
 			_rpc_refused.rpc_id(peer_id, "The room is full.")
 			return
 		entry = {"seat": roster.size(), "name": player_name.strip_edges().left(GameConfig.NAME_MAX_LENGTH),
-			"color_name": _free_color(), "figure": GameConfig.figure_or_default(""), "token": _new_token()}
+			"color_name": _free_color(), "figure": Figures.or_default(""), "token": _new_token()}
 		if entry["name"] == "":
 			entry["name"] = "Player %d" % (entry["seat"] + 1)
 		entry["name"] = _unique_name(entry["name"])
@@ -560,6 +562,32 @@ func relay_shake(seat: int, state: Dictionary) -> void:
 func _rpc_shake_seen(seat: int, state: Dictionary) -> void:
 	if _controller:
 		_controller.receive_shake(seat, state)
+
+## An emote from this player (cosmetic; MatchController checks and shows it).
+func send_taunt(emote_id: String) -> void:
+	if is_host():
+		relay_taunt(local_seat, emote_id)
+	elif _is_connected():
+		_rpc_taunt.rpc_id(1, emote_id)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_taunt(emote_id: String) -> void:
+	if not is_host() or _controller == null:
+		return
+	var seat := _seat_of_peer(multiplayer.get_remote_sender_id())
+	if seat >= 0:
+		_controller.receive_emote(seat, emote_id) # checks it, then relays
+
+## Host: pass `seat`'s emote on to everyone else.
+func relay_taunt(seat: int, emote_id: String) -> void:
+	for entry in roster:
+		if entry["seat"] != local_seat and entry["seat"] != seat and _is_present(entry):
+			_rpc_taunt_seen.rpc_id(entry["peer"], seat, emote_id)
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_taunt_seen(seat: int, emote_id: String) -> void:
+	if _controller:
+		_controller.receive_emote(seat, emote_id)
 
 func send_rejected(seat: int, intent: Dictionary, reason: String) -> void:
 	var peer := _peer_of_seat(seat)

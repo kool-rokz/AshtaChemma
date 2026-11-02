@@ -31,7 +31,7 @@ func _ready() -> void:
 
 func _on_card_played(player: int, card: CardData, targets: Array) -> void:
 	var game := card_manager.game
-	var color: Color = GameConfig.lacquer_of(game.players[player].get("color_name", "Red"))["base"]
+	var color: Color = TeamColors.of(game.players[player].get("color_name", "")).base
 	match card.id:
 		&"sprint":
 			_burst_at_pawn(targets, Color(0.5, 1.0, 0.6))

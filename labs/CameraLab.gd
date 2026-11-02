@@ -66,7 +66,7 @@ func _spawn_figures() -> void:
 			fig.queue_free()
 	_figures.clear()
 	_squares.clear()
-	var ids := GameConfig.FIGURES.keys()
+	var ids := Figures.ids()
 	for seat in 4:
 		var row: Array = []
 		for pawn in 4:

@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="FigureData" format=3]
+
+[ext_resource type="PackedScene" path="res://assets/pawns/elephant.glb" id="1_5y40h"]
+[ext_resource type="Script" path="res://pawn/FigureData.gd" id="2_qy887"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/attack.ogg" id="3_ebtxp"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/celebrate.ogg" id="4_4pnlg"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/idle.ogg" id="5_edkh8"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/laugh.ogg" id="6_ulrev"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/plead.ogg" id="7_4pw15"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/relief.ogg" id="8_weqcv"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/sad.ogg" id="9_21xl7"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/elephant/taunt.ogg" id="10_lovgm"]
+
+[resource]
+script = ExtResource("2_qy887")
+id = &"elephant"
+display_name = "Elephant"
+model = ExtResource("1_5y40h")
+voices = Dictionary[StringName, AudioStream]({
+&"attack": ExtResource("3_ebtxp"),
+&"celebrate": ExtResource("4_4pnlg"),
+&"idle": ExtResource("5_edkh8"),
+&"laugh": ExtResource("6_ulrev"),
+&"plead": ExtResource("7_4pw15"),
+&"relief": ExtResource("8_weqcv"),
+&"sad": ExtResource("9_21xl7"),
+&"taunt": ExtResource("10_lovgm")
+})

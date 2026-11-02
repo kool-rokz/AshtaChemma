@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="VillagerData" format=3 uid="uid://nr0s54rs6dqd"]
+
+[ext_resource type="PackedScene" uid="uid://br3om2tq3fbnm" path="res://assets/villagers/chinna.glb" id="1_cd6gs"]
+[ext_resource type="Script" uid="uid://bjf7mvre6lerv" path="res://courtyard/VillagerData.gd" id="2_wg17a"]
+[ext_resource type="Resource" path="res://sound/cues/villager_clap.tres" id="cue_0"]
+
+[resource]
+script = ExtResource("2_wg17a")
+id = &"chinna"
+display_name = "Chinna"
+model = ExtResource("1_cd6gs")
+scale = 2.2
+reactions = Dictionary[StringName, String]({
+&"big_throw": "celebrate",
+&"capture": "celebrate",
+&"forfeit": "laugh",
+&"home": "celebrate",
+&"near_miss": "laugh",
+&"win": "celebrate"
+})
+sounds = Dictionary[StringName, Resource]({
+&"celebrate": ExtResource("cue_0")
+})

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="FigureData" format=3]
+
+[ext_resource type="PackedScene" path="res://assets/pawns/bullock.glb" id="1_g0u5w"]
+[ext_resource type="Script" path="res://pawn/FigureData.gd" id="2_6kud8"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/attack.ogg" id="3_pvrhj"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/celebrate.ogg" id="4_fibd4"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/idle.ogg" id="5_8ksw0"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/laugh.ogg" id="6_imup3"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/plead.ogg" id="7_8v5jc"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/relief.ogg" id="8_05y5a"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/sad.ogg" id="9_tohlr"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/bullock/taunt.ogg" id="10_djwpw"]
+
+[resource]
+script = ExtResource("2_6kud8")
+id = &"bullock"
+display_name = "Bullock"
+model = ExtResource("1_g0u5w")
+order = 5
+voices = Dictionary[StringName, AudioStream]({
+&"attack": ExtResource("3_pvrhj"),
+&"celebrate": ExtResource("4_fibd4"),
+&"idle": ExtResource("5_8ksw0"),
+&"laugh": ExtResource("6_imup3"),
+&"plead": ExtResource("7_8v5jc"),
+&"relief": ExtResource("8_05y5a"),
+&"sad": ExtResource("9_tohlr"),
+&"taunt": ExtResource("10_djwpw")
+})

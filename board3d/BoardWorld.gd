@@ -157,10 +157,20 @@ static func make_diya() -> Node3D:
 	flicker.wait_time = 0.07
 	flicker.autostart = true
 	flicker.timeout.connect(func():
-		light.light_energy = 2.2 + randf_range(-0.35, 0.35)
-		flame.scale = Vector3.ONE * randf_range(0.9, 1.1))
+		var boost := float(lamp.get_meta("boost", 1.0)) # flare_lamp()
+		light.light_energy = (2.2 + randf_range(-0.35, 0.35)) * boost
+		flame.scale = Vector3.ONE * randf_range(0.9, 1.1) * sqrt(boost))
 	lamp.add_child(flicker)
 	return lamp
+
+## The lamp flares up for a moment (a big throw), then settles back.
+static func flare_lamp(lights: Dictionary, peak: float = 2.8, seconds: float = 1.6) -> void:
+	var lamp: Node3D = lights.get("lamp")
+	if lamp == null:
+		return
+	var t := lamp.create_tween()
+	t.tween_method(func(b: float): lamp.set_meta("boost", b), 1.0, peak, 0.15)
+	t.tween_method(func(b: float): lamp.set_meta("boost", b), peak, 1.0, seconds).set_trans(Tween.TRANS_SINE)
 
 ## A cowry shell resting on the board (a prop).
 static func add_shell(parent: Node, position: Vector3, open_up: bool, yaw: float) -> MeshInstance3D:

@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="VillagerData" format=3 uid="uid://b34qwvde12xl3"]
+
+[ext_resource type="PackedScene" uid="uid://di24qpincpj8o" path="res://assets/villagers/pilli.glb" id="1_jueim"]
+[ext_resource type="Script" uid="uid://bjf7mvre6lerv" path="res://courtyard/VillagerData.gd" id="2_2d247"]
+[ext_resource type="Resource" path="res://sound/cues/cat_meow.tres" id="cue_0"]
+[ext_resource type="Resource" path="res://sound/cues/cat_hiss.tres" id="cue_1"]
+
+[resource]
+script = ExtResource("2_2d247")
+id = &"pilli"
+display_name = "Pilli"
+model = ExtResource("1_jueim")
+spot = 3
+scale = 1.6
+reactions = Dictionary[StringName, String]({
+&"big_throw": "gasp",
+&"capture": "gasp",
+&"near_miss": "laugh",
+&"win": "celebrate"
+})
+sounds = Dictionary[StringName, Resource]({
+&"celebrate": ExtResource("cue_0"),
+&"gasp": ExtResource("cue_1")
+})

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="FigureData" format=3]
+
+[ext_resource type="PackedScene" path="res://assets/pawns/doll.glb" id="1_aljad"]
+[ext_resource type="Script" path="res://pawn/FigureData.gd" id="2_rfl26"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/attack.ogg" id="3_jwc3g"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/celebrate.ogg" id="4_27tv1"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/idle.ogg" id="5_er061"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/laugh.ogg" id="6_2pr44"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/plead.ogg" id="7_6j4y5"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/relief.ogg" id="8_xfm81"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/sad.ogg" id="9_fekpb"]
+[ext_resource type="AudioStream" path="res://assets/audio/voices/doll/taunt.ogg" id="10_28u74"]
+
+[resource]
+script = ExtResource("2_rfl26")
+id = &"doll"
+display_name = "Dancer"
+model = ExtResource("1_aljad")
+order = 4
+voices = Dictionary[StringName, AudioStream]({
+&"attack": ExtResource("3_jwc3g"),
+&"celebrate": ExtResource("4_27tv1"),
+&"idle": ExtResource("5_er061"),
+&"laugh": ExtResource("6_2pr44"),
+&"plead": ExtResource("7_6j4y5"),
+&"relief": ExtResource("8_xfm81"),
+&"sad": ExtResource("9_fekpb"),
+&"taunt": ExtResource("10_28u74")
+})
