@@ -45,9 +45,13 @@ func _on_movable_pawns_changed(pawns: Array[Pawn]) -> void:
 			pawn.set_highlighted(false)
 	_refresh_preview()
 
-## Homebase glow + inner-ring entry arrow for whoever is playing now.
+## Homebase glow + inner-ring entry arrow for whoever is playing now (online: only on
+## this screen's own turn, so the glow means "you're up").
 func _update_markers() -> void:
 	var player := _gm.current_player_index
+	if not _hud.is_local_turn():
+		_highlighter().set_active_player(-1, -1, -1, Color.WHITE, false)
+		return
 	var entry := _gm.get_inner_ring_entry(player)
 	_highlighter().set_active_player(_gm.get_homebase_tile(player), entry[0], entry[1],
 		_gm.get_player_color(player), _gm.is_unlocked(player))

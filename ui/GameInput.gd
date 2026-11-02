@@ -11,6 +11,7 @@ extends Node
 ##   throw_prev/next     Up, Down / d-pad up, down   which throw to use
 ##   cards_toggle        C / Y               go to (or leave) your hand of cards
 ##   log_toggle          Tab / Back (-)      the game log
+##   menu_toggle         F10 / Start (+)     the in-match menu (Esc too, when nothing else wants it)
 ## Actions are added in code (not project.godot), the first time a screen calls ensure().
 ## Menus use Godot's own ui_* actions and focus; screens hand their first button to
 ## offer_focus() so a pad (which has no pointer) always has something to act on.
@@ -104,6 +105,7 @@ static func _add_actions() -> void:
 		"throw_next": [_key(KEY_DOWN), _pad_button(JOY_BUTTON_DPAD_DOWN)],
 		"cards_toggle": [_key(KEY_C), _pad_button(JOY_BUTTON_Y)],
 		"log_toggle": [_key(KEY_TAB), _pad_button(JOY_BUTTON_BACK)],
+		"menu_toggle": [_key(KEY_F10), _pad_button(JOY_BUTTON_START)],
 	}
 	for action in bindings:
 		if InputMap.has_action(action):

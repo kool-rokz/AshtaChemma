@@ -37,7 +37,7 @@ func _ready() -> void:
 	_next = MenuStyle.button("Next >")
 	_next.name = "NextPage"
 	_next.pressed.connect(_step.bind(1))
-	add_child(MenuStyle.button_row([_prev, _next]))
+	add_footer([_prev, _next])
 	_show_page()
 
 func first_focus() -> Control:

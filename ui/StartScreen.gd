@@ -37,6 +37,8 @@ var _stage: MenuStage
 var _backdrop: ColorRect
 var _panel: PanelContainer
 var _scroll: ScrollContainer
+## Holds the current screen's footer: its main buttons, always in view.
+var _footer_slot: VBoxContainer
 var _screen: MenuScreen
 var _screen_id: StringName
 var _autostart: int = 0
@@ -66,10 +68,16 @@ func _ready() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
 	add_child(_panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 12)
+	_panel.add_child(column)
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.follow_focus = true
-	_panel.add_child(_scroll)
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(_scroll)
+	_footer_slot = VBoxContainer.new()
+	column.add_child(_footer_slot)
 	_stage.figure_clicked.connect(func(figure: String):
 		if _screen:
 			_screen.on_figure_clicked(figure))
@@ -119,6 +127,8 @@ func show_screen(id: StringName, args: Dictionary = {}) -> void:
 		return
 	if _screen:
 		_scroll.remove_child(_screen)
+		if _screen.footer.get_parent() == _footer_slot:
+			_footer_slot.remove_child(_screen.footer)
 		_screen.queue_free()
 	_screen_id = id
 	_screen = (screens[id] as GDScript).new()
@@ -130,6 +140,7 @@ func show_screen(id: StringName, args: Dictionary = {}) -> void:
 	_screen.navigate.connect(show_screen)
 	_screen.action.connect(_on_action)
 	_scroll.add_child(_screen)
+	_footer_slot.add_child(_screen.footer)
 	_scroll.scroll_vertical = 0
 	GameInput.offer_focus(get_tree(), _screen.first_focus())
 

@@ -70,7 +70,7 @@ func _ready() -> void:
 	_start_button.name = "StartGame"
 	_start_button.visible = net.is_host()
 	_start_button.pressed.connect(net.start_match)
-	add_child(MenuStyle.button_row([_leave_button, _start_button]))
+	add_footer([_leave_button, _start_button])
 
 	# Method callables (not lambdas) so the connections end when this screen is freed
 	net.roster_changed.connect(_on_roster_changed)

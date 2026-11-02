@@ -14,13 +14,12 @@ func _ready() -> void:
 	var sizes: Array = Settings.UI_SCALES.map(func(s: float): return "%d%%" % roundi(s * 100))
 	_choice("UI size", sizes, Settings.UI_SCALES, Settings.ui_scale(), Settings.UI_SCALE,
 		func(_v): Display.apply(get_tree()))
-	_volume("Music", Settings.MUSIC_VOLUME, Settings.music_volume(), &"ui_click")
-	_volume("Effects", Settings.EFFECTS_VOLUME, Settings.effects_volume(), &"turn_yours")
+	add_child(MenuStyle.row("Music", MenuStyle.volume_slider(Settings.MUSIC_VOLUME, &"ui_click")))
+	add_child(MenuStyle.row("Effects", MenuStyle.volume_slider(Settings.EFFECTS_VOLUME, &"turn_yours")))
 	add_child(MenuStyle.note("Graphics: Low turns off shadows and edge smoothing (for phones and handhelds). It applies from the next match."))
 	var back := MenuStyle.button("Back", 180)
-	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	back.pressed.connect(go_back)
-	add_child(back)
+	add_footer([back])
 
 func first_focus() -> Control:
 	return _first
@@ -35,13 +34,3 @@ func _choice(title: String, labels: Array, values: Array, current: Variant, key:
 			after.call(values[i]))
 	add_child(MenuStyle.row(title, picker))
 	return picker
-
-## A 0-100% volume, saved to Settings.AUDIO/key; plays `sample` when let go.
-func _volume(title: String, key: String, current: float, sample: StringName) -> void:
-	var slider := MenuStyle.slider(current)
-	slider.name = title + "Volume"
-	slider.value_changed.connect(func(v: float):
-		Settings.set_value(Settings.AUDIO, key, v)
-		Sound.apply_volumes())
-	slider.drag_ended.connect(func(_changed: bool): Sound.play(sample))
-	add_child(MenuStyle.row(title, slider))

@@ -12,9 +12,8 @@ func _ready() -> void:
 	if note != "":
 		add_child(MenuStyle.note(note))
 	_cancel = MenuStyle.button("Cancel", 180)
-	_cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_cancel.pressed.connect(go_back)
-	add_child(_cancel)
+	add_footer([_cancel])
 
 func first_focus() -> Control:
 	return _cancel

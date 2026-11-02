@@ -65,6 +65,10 @@ const ABSENT_DRAFT_GRACE := 10.0
 ## Host: game seconds between stand-in actions, so the others can follow them.
 const STAND_IN_PACE := 1.0
 
+## Moves on its own when only one move is possible (see _only_move), after a short pause.
+@export var auto_move: bool = true
+const AUTO_MOVE_DELAY := 0.6
+
 ## Host: actions played for absent players (stats, tests).
 var stand_in_actions: int = 0
 ## Live shake updates from other players accepted by this copy (stats, tests).
@@ -93,6 +97,7 @@ func _ready() -> void:
 		shell_stage.throw_released.connect(throw_shells)
 		shell_stage.shake_changed.connect(send_shake)
 	hud.throw_chip_pressed.connect(select_throw)
+	game.movable_pawns_changed.connect(func(_pawns): _auto_move.call_deferred())
 	game.board.tile_clicked.connect(_on_tile_clicked)
 	for pawn in game.get_all_pawns():
 		pawn.clicked.connect(_on_pawn_clicked)
@@ -182,6 +187,35 @@ func receive_shake(seat: int, state: Dictionary) -> void:
 		net.relay_shake(seat, state)
 	if shell_stage:
 		shell_stage.show_remote_shake(seat, state)
+
+## The one move this screen can make, or null if there's a choice: one throw value
+## usable, and every pawn that can move with it standing on the same square (e.g. the
+## pawns stacked on the homebase, or the last pawn left).
+func _only_move() -> Pawn:
+	if game.current_state != GameManager.GameState.SELECTING_PIECE or not is_local_turn():
+		return null
+	if _cards() and card_manager.is_targeting():
+		return null
+	var values := {}
+	for value in game.throw_pool:
+		if game.can_use_throw(value):
+			values[value] = true
+	if values.size() != 1:
+		return null
+	var movable := game.get_movable_pawns(game.current_roll)
+	var tiles := {}
+	for pawn in movable:
+		tiles[pawn.current_tile_index] = true
+	return movable[0] if tiles.size() == 1 else null
+
+func _auto_move() -> void:
+	var first := _only_move() if auto_move and mode != Mode.REPLICA else null
+	if first == null:
+		return
+	await get_tree().create_timer(AUTO_MOVE_DELAY).timeout
+	# Still the same single move, and nothing else waiting to be applied?
+	if _queue.is_empty() and _only_move() == first:
+		move_pawn(first)
 
 func _on_pawn_clicked(pawn: Pawn) -> void:
 	if Time.get_ticks_msec() - _last_pick_msec < PICK_ECHO_MSEC:

@@ -23,6 +23,8 @@ const SPACING := 100.0
 const PEEK := 0.5
 ## The hand's centre sits this far left of the screen's middle (the throw panel is right).
 const CENTRE_SHIFT := 40.0
+## A card that can't be played right now (not your turn, already thrown, one played).
+const BLOCKED_TINT := Color(0.4, 0.38, 0.36, 1)
 ## Seconds a played card spends flying in, held for reading, and flying to the pile.
 const PLAY_IN := 0.4
 const PLAY_HOLD := 1.1
@@ -130,7 +132,7 @@ func _layout(animate: bool) -> void:
 		var card := _cards[i]
 		var pose := _pose_for(card, i, n)
 		card.z_index = 10 if card == _hovered or card == _chosen else i
-		card.modulate = Color(1, 1, 1, 1) if i >= _blocked.size() or _blocked[i] == "" or not card.face_up else Color(0.6, 0.6, 0.6, 1)
+		card.modulate = Color(1, 1, 1, 1) if i >= _blocked.size() or _blocked[i] == "" or not card.face_up else BLOCKED_TINT
 		if animate:
 			var t := card.create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 			for key in pose:

@@ -41,6 +41,8 @@ const MIN_RELEASE_SPEED := 1.4
 const FULL_RELEASE_SPEED := 14.0
 ## Shorter, shake-free holds count as a click (a quick toss).
 const CLICK_TIME := 0.2
+## Let go of the shells this close to their spot (board units) and they're put down, not thrown.
+const DROP_RADIUS := 0.55
 const RESULT_HOLD := 0.85
 const GATHER_TIME := 0.5
 const LIFT_TIME := 0.18
@@ -86,6 +88,7 @@ var _pointer_screen: Vector2
 var _history: Array[Vector2] = []
 var _history_times: Array[float] = []
 var _energy: float = 0.0
+var _drop_ring: MeshInstance3D
 var _shaken: float = 0.0
 var _faces: Array[bool] = [false, false, false, false]
 ## Per shell in the hand: roll (0 = belly down, PI = open side up) and yaw.
@@ -208,6 +211,11 @@ func _begin_hold(by_pad: bool) -> void:
 	_shaken = 0.0
 	var mouse: Variant = _pointer(_pointer_screen)
 	_hand = _side_anchor(game.current_player_index) if by_pad or mouse == null else _clamp_hand(mouse)
+	_show_drop_spot(not by_pad)
+	hud.set_hint(GameInput.pick(
+		"Shake, then flick and let go to throw. Changed your mind? Let go over the ringed spot (or right-click).",
+		"Shake, then flick and let go to throw. Changed your mind? Let go over the ringed spot.",
+		"Shake with the stick / arrows, let go to throw. B / Esc puts them down."))
 	_hand_velocity = Vector2.ZERO
 	_history.clear()
 	_history_times.clear()
@@ -276,6 +284,10 @@ func _place_hand_shells() -> void:
 		_shells[i].transform = pose
 
 func _release() -> void:
+	if not _by_pad and _hold_time >= CLICK_TIME and _over_drop_spot():
+		_cancel_hold() # dropped back on their spot: put down, not thrown
+		return
+	_show_drop_spot(false)
 	var gesture := ThrowGesture.new()
 	var speed := 0.0
 	var direction := Vector2.ZERO
@@ -309,7 +321,26 @@ func _cancel_hold() -> void:
 	if phase != Phase.HOLDING:
 		return
 	phase = Phase.IDLE
+	_show_drop_spot(false)
+	hud.set_hint(HUD.throw_hint())
 	_rest_at(_resting_seat, true)
+
+## While holding: a chalk ring on the shells' spot. Let go over it to put them down.
+func _show_drop_spot(on: bool) -> void:
+	if on and _drop_ring == null:
+		var spot := _spot(_resting_seat)
+		_drop_ring = CardFx.chalk_mark(view, Vector3(spot.x, 0.004, spot.z), Color(0.95, 0.93, 0.85), true, 0.3)
+		_drop_ring.scale = Vector3.ONE * DROP_RADIUS * 2.2
+	elif not on and _drop_ring != null:
+		_drop_ring.queue_free()
+		_drop_ring = null
+
+## Is the pointer over the shells' own spot (letting go there puts them down)? The
+## pointer, not the hand: the hand stays over the board, and the spot is beside it.
+func _over_drop_spot() -> bool:
+	var spot := _spot(_resting_seat)
+	var at: Variant = _pointer(_pointer_screen)
+	return at != null and (at as Vector2).distance_to(Vector2(spot.x, spot.z)) < DROP_RADIUS
 	shake_changed.emit({"holding": false})
 
 # --- WATCHING ANOTHER PLAYER SHAKE ---

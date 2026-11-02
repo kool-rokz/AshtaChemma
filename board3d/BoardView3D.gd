@@ -531,17 +531,19 @@ func cheer(player: int, cue: StringName) -> void:
 		fig.play(PawnFigure.CELEBRATE)
 
 ## A near miss: an opponent landed one step short of (or past) a pawn it could have
-## captured. That pawn's team cheers in relief, each figure in its own voice.
+## captured. A heartbeat and a whoosh, and that pawn's team flinches, trembles and sags
+## in relief, each figure in its own voice (PawnFigure.relieve).
 func _on_pawn_moved(pawn: Pawn, _from_tile: int, _to_tile: int, _steps: int) -> void:
 	var teams := {}
 	for spared in game.get_near_misses(pawn):
 		teams[spared.team_id] = true
 	if teams.is_empty():
 		return
-	await get_tree().create_timer(0.35).timeout
+	await get_tree().create_timer(0.25).timeout
+	Sound.play(&"near_miss")
 	for team in teams:
 		for fig in _team_figures(team):
-			fig.play(PawnFigure.CELEBRATE, PawnFigure.RELIEF)
+			(fig as PawnFigure).relieve(randf() * 0.12)
 
 ## Pointing at (or pad-focusing) a pawn that can be picked: its figure says hello.
 func _on_pawn_hovered(pawn: Pawn) -> void:

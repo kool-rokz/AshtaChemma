@@ -12,7 +12,7 @@ const IDLE := "idle"
 const ATTACK := "attack"
 const CELEBRATE := "celebrate"
 const SAD := "sad"
-## Not an animation: the voice for escaping a near miss (played with CELEBRATE).
+## Not an animation: the voice for escaping a near miss (see relieve()).
 const RELIEF := "relief"
 const BLEND_TIME := 0.15
 
@@ -67,6 +67,25 @@ func play(animation: String, voice_as: String = "") -> void:
 ## This figure's sound for an animation (IDLE is a little hello when it's picked).
 func voice(animation: String, delay: float = 0.0, volume_db: float = 0.0) -> void:
 	Sound.play(StringName("%s_%s" % [figure, animation]), volume_db, delay)
+
+## A near miss: the figure flinches back from the danger, trembles, then sags with a
+## big exhale and settles, while saying its RELIEF line. Moves the model only (the
+## figure node stays where the board view puts it), so it works mid-idle anywhere.
+func relieve(delay: float = 0.0) -> void:
+	if _model == null:
+		return
+	var t := create_tween()
+	if delay > 0.0:
+		t.tween_interval(delay)
+	t.tween_callback(voice.bind(RELIEF))
+	t.tween_property(_model, "rotation:x", -0.38, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	for i in 5:
+		t.tween_property(_model, "rotation:z", 0.09 if i % 2 == 0 else -0.09, 0.06)
+	t.tween_property(_model, "rotation:z", 0.0, 0.06)
+	t.tween_property(_model, "rotation:x", 0.08, 0.25).set_trans(Tween.TRANS_SINE)
+	t.parallel().tween_property(_model, "scale", Vector3(1.12, 0.84, 1.12), 0.25).set_trans(Tween.TRANS_SINE)
+	t.tween_property(_model, "rotation:x", 0.0, 0.35).set_trans(Tween.TRANS_SINE)
+	t.parallel().tween_property(_model, "scale", Vector3.ONE, 0.45).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 
 func current_animation() -> String:
 	return String(_player.current_animation) if _player else ""

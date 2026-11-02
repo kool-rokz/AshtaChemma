@@ -27,7 +27,7 @@ func _ready() -> void:
 	var go := MenuStyle.button("Join")
 	go.name = "JoinConfirm"
 	go.pressed.connect(func(): action.emit(&"join", {"address": _address_edit.text}))
-	add_child(MenuStyle.button_row([back, go]))
+	add_footer([back, go])
 	add_child(MenuStyle.error(String(args.get("error", ""))))
 	stage.show_lineup(HomeScreen.saved_figure())
 

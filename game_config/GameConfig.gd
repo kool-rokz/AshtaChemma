@@ -10,7 +10,7 @@ const PAWNS_PER_PLAYER := 4
 const NAME_MAX_LENGTH := 16
 
 ## Shown in the menu. Bump when shipping a build.
-const GAME_VERSION := "0.8.0"
+const GAME_VERSION := "0.8.1"
 ## Bump whenever online messages or game rules change in a way older builds would
 ## misread: the host refuses players whose build speaks a different protocol.
 const PROTOCOL_VERSION := 6

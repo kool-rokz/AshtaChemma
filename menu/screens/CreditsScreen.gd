@@ -33,9 +33,8 @@ func _ready() -> void:
 	body.text = text
 	add_child(body)
 	_back = MenuStyle.button("Back", 180)
-	_back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_back.pressed.connect(go_back)
-	add_child(_back)
+	add_footer([_back])
 
 func first_focus() -> Control:
 	return _back

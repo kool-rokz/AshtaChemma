@@ -11,6 +11,8 @@ extends CanvasLayer
 ##     shells (ShellStage). `throw_allowed` says when this screen may throw.
 ##   - the newest event as a toast, and the full log on a palm-leaf scroll (Log / Tab)
 ##   - the winner / notice overlay
+##   - the Menu (MatchMenu: volume, Leave match), from its button, Esc, F10 or pad Start;
+##     no throwing while it's open
 ## Board highlights come from its BoardPresenter; keyboard / pad picking from its
 ## PadCursor. Laid out inside the screen's safe area (Display) and again whenever the
 ## window changes size. Every action works without a pointer: throw_prev / throw_next
@@ -65,6 +67,8 @@ var _toast_tween: Tween
 var _log_panel: PanelContainer
 var _log: RichTextLabel
 var _log_open := false
+var _menu: MatchMenu
+var _menu_button: Button
 var _winner_overlay: Control
 var _winner_label: Label
 ## Online: players whose connection dropped (player id -> true).
@@ -84,6 +88,11 @@ func _init() -> void:
 	_build_throw_panel()
 	_build_toast_and_log()
 	_build_winner_overlay()
+	_menu = MatchMenu.new()
+	_menu.name = "MatchMenu"
+	add_child(_menu)
+	_menu.closed.connect(_update_throw_allowed)
+	_menu.leave_requested.connect(_back_to_menu)
 
 func _ready() -> void:
 	GameFonts.install()
@@ -246,6 +255,10 @@ func _build_toast_and_log() -> void:
 	log_button.name = "LogButton"
 	log_button.pressed.connect(toggle_log)
 	_root.add_child(log_button)
+	_menu_button = HudStyle.button("Menu", Vector2(76, 40))
+	_menu_button.name = "MenuButton"
+	_menu_button.pressed.connect(open_menu)
+	_root.add_child(_menu_button)
 	_log_panel = PanelContainer.new()
 	_log_panel.add_theme_stylebox_override("panel", HudStyle.leaf())
 	_log = RichTextLabel.new()
@@ -269,6 +282,7 @@ func _layout() -> void:
 	_throw_panel.position = screen - _throw_panel.size - Vector2(MARGIN, MARGIN)
 	var log_button: Button = _log_panel.get_meta("button")
 	log_button.position = Vector2(screen.x - MARGIN - 64, 14)
+	_menu_button.position = Vector2(log_button.position.x - 10 - 76, 14)
 	_log_panel.size = Vector2(LOG_WIDTH, screen.y - 66 - _throw_panel.size.y - MARGIN * 2.0)
 	_log_panel.position = Vector2(screen.x - MARGIN - LOG_WIDTH if _log_open else screen.x + 10, 64)
 
@@ -278,8 +292,22 @@ func toggle_log() -> void:
 	var x := screen.x - MARGIN - LOG_WIDTH if _log_open else screen.x + 10
 	create_tween().tween_property(_log_panel, "position:x", x, 0.3).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
+## The in-match menu (volume, leave).
+func open_menu() -> void:
+	if not _menu.visible:
+		_menu.open()
+		_update_throw_allowed()
+
+## Back to the main menu (it closes any online session on arrival).
+func _back_to_menu() -> void:
+	get_tree().change_scene_to_file(START_SCREEN_PATH)
+
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("log_toggle"):
+	# Esc / B that nothing else wanted (no card to cancel, no shells in hand), or F10 / Start
+	if event.is_action_pressed("menu_toggle") or (event.is_action_pressed("pick_cancel") and not _winner_overlay.visible):
+		open_menu()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("log_toggle"):
 		toggle_log()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("throw_next", true) or event.is_action_pressed("throw_prev", true):
@@ -324,7 +352,7 @@ func _build_winner_overlay() -> void:
 	back.add_theme_font_size_override("font_size", 20)
 	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	# The menu closes any online session on arrival
-	back.pressed.connect(func(): get_tree().change_scene_to_file(START_SCREEN_PATH))
+	back.pressed.connect(_back_to_menu)
 	box.add_child(back)
 
 # --- PUBLIC (for add-on systems such as the card UI) ---
@@ -439,7 +467,7 @@ func _show_toast(bbcode: String) -> void:
 	_toast_label.text = bbcode
 	_toast.reset_size()
 	var screen := _screen()
-	_toast.position = Vector2(screen.x - MARGIN - 64 - 12 - _toast.size.x, 4)
+	_toast.position = Vector2(_menu_button.position.x - 12 - _toast.size.x, 4)
 	if _toast_tween:
 		_toast_tween.kill()
 	_toast_tween = create_tween()
@@ -465,9 +493,13 @@ func _refresh_players() -> void:
 		(badge["marks"] as Control).queue_redraw()
 
 # --- SIGNAL HANDLERS ---
-func _on_state_changed(state: GameManager.GameState) -> void:
-	throw_allowed = not _closed and state == GameManager.GameState.WAITING_FOR_ROLL \
-		and is_local_turn() and not _gm.is_game_finished()
+func _on_state_changed(_state: GameManager.GameState) -> void:
+	_update_throw_allowed()
+
+## May this screen throw: its turn, waiting for a throw, nothing covering the match.
+func _update_throw_allowed() -> void:
+	throw_allowed = _gm != null and not _closed and not _menu.visible \
+		and _gm.current_state == GameManager.GameState.WAITING_FOR_ROLL and is_local_turn() and not _gm.is_game_finished()
 
 func _on_turn_changed(player_id: int) -> void:
 	var mine := _online() and is_local_turn()

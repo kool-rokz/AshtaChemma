@@ -159,6 +159,17 @@ static func slider(value: float) -> HSlider:
 	result.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	return result
 
+## A 0-100% volume slider for Settings.AUDIO/key (MUSIC_VOLUME / EFFECTS_VOLUME):
+## saves and applies as it moves, and plays `sample` when let go.
+static func volume_slider(key: String, sample: StringName) -> HSlider:
+	var current := Settings.music_volume() if key == Settings.MUSIC_VOLUME else Settings.effects_volume()
+	var result := slider(current)
+	result.value_changed.connect(func(v: float):
+		Settings.set_value(Settings.AUDIO, key, v)
+		Sound.apply_volumes())
+	result.drag_ended.connect(func(_changed: bool): Sound.play(sample))
+	return result
+
 ## A labelled row: the label on the left, the control on the right.
 static func row(text: String, control: Control) -> HBoxContainer:
 	var box := HBoxContainer.new()
