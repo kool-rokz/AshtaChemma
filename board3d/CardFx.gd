@@ -8,12 +8,14 @@ extends RefCounted
 
 const GOLD := Color(1.0, 0.8, 0.35)
 
-## A see-through golden dome over a pawn that stays (call free() on it to end it).
-static func shield(parent: Node3D, at: Vector3) -> MeshInstance3D:
+## A see-through golden dome over a pawn that stays (call free() on it to end it): clear
+## in the middle so the figure shows through, a glowing rim and thin woven bands.
+## height / radius: the dome's size (fit it round the figure, see PawnFigure.height()).
+static func shield(parent: Node3D, at: Vector3, height: float = 0.62, radius: float = 0.36) -> MeshInstance3D:
 	var dome := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.34
-	sphere.height = 0.68
+	sphere.radius = radius
+	sphere.height = height # (with is_hemisphere, the dome's own height)
 	sphere.is_hemisphere = true
 	dome.mesh = sphere
 	var mat := ShaderMaterial.new()

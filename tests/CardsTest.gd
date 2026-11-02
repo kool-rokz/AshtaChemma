@@ -19,6 +19,7 @@ func _ready() -> void:
 	await _scenario_sanctuary_tile()
 	await _scenario_banish_targets_normal_squares_only()
 	await _scenario_switcheroo_two_targets()
+	await _scenario_aegis_blocks_swap()
 	await _scenario_master_key_and_turn_limit()
 	await _scenario_window_closes_after_throw()
 	await _scenario_cancel_keeps_card()
@@ -201,6 +202,23 @@ func _scenario_switcheroo_two_targets() -> void:
 	_put(theirs, _path(0)[7])
 	_check(await _play(0, [mine, theirs]), "Switcheroo should play")
 	_check(mine.current_tile_index == _path(0)[7] and theirs.current_tile_index == _path(0)[5], "pawns swapped")
+
+func _scenario_aegis_blocks_swap() -> void:
+	print("scenario: an Aegis-shielded pawn can't be swapped")
+	await _new_game([], [&"aegis", &"switcheroo"])
+	var shielded: Pawn = _pawns(0)[0]
+	var other: Pawn = _pawns(0)[1]
+	var theirs: Pawn = _pawns(1)[0]
+	_put(shielded, _path(0)[5])
+	_put(other, _path(0)[3])
+	_put(theirs, _path(0)[7])
+	_check(await _play(0, [shielded]), "Aegis should play")
+	gm.turn_changed.emit(0) # the owner's next turn: cards again, still shielded (1 turn left)
+	await get_tree().process_frame
+	_check(cm.request_play(cm.find_hand_index(0, &"switcheroo")), "Switcheroo starts")
+	var candidates := cm.get_target_candidates()
+	_check(not shielded in candidates and other in candidates, "the shielded pawn isn't offered, the other is (got %s)" % str(candidates))
+	cm.cancel_targeting()
 
 func _scenario_master_key_and_turn_limit() -> void:
 	print("scenario: Master Key unlocks; a second card the same turn is refused")

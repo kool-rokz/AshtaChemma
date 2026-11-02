@@ -258,7 +258,8 @@ func _update_pawn_marks(pawn: Pawn, fig: PawnFigure, size: float) -> void:
 	var dome: MeshInstance3D = _domes.get(pawn)
 	var shielded := pawn.status_color.a > 0.0
 	if shielded and dome == null:
-		dome = CardFx.shield(self, fig.position)
+		# Fitted round the figure as it stands (stacked figures are smaller)
+		dome = CardFx.shield(self, fig.position, fig.height() * size + 0.08, 0.36 * size)
 		_domes[pawn] = dome
 	elif not shielded and dome != null:
 		dome.queue_free()

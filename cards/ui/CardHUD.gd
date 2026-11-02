@@ -332,6 +332,8 @@ func _on_card_rejected(_player: int, card: CardData, reason: String) -> void:
 	_hud.set_hint("Can't play %s: %s" % [card.title, reason])
 
 func _on_modifier_expired(active: ActiveModifier) -> void:
+	if active.data.label == "" and active.data.marker_color.a <= 0.0:
+		return # a card's quiet companion rule (e.g. Aegis's "no swaps"): its main one says it
 	var what := active.data.label if active.data.label != "" else active.card.title
 	_hud.log_message("%s's [b]%s[/b] wore off (%s)." % [_hud.who(active.owner), active.card.title, what])
 	_refresh_player_notes()

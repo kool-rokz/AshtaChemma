@@ -15,6 +15,8 @@ const SAD := "sad"
 ## Not an animation: the voice for escaping a near miss (see relieve()).
 const RELIEF := "relief"
 const BLEND_TIME := 0.15
+## Every figure's height with its plinth (see height()).
+const HEIGHT := 0.58
 
 var figure: String = ""
 var _player: AnimationPlayer
@@ -86,6 +88,12 @@ func relieve(delay: float = 0.0) -> void:
 	t.parallel().tween_property(_model, "scale", Vector3(1.12, 0.84, 1.12), 0.25).set_trans(Tween.TRANS_SINE)
 	t.tween_property(_model, "rotation:x", 0.0, 0.35).set_trans(Tween.TRANS_SINE)
 	t.parallel().tween_property(_model, "scale", Vector3.ONE, 0.45).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+## How tall the figure stands (local units). The art pipeline makes every figure about
+## half a unit tall with its plinth (AshtaChemmaArt/kondapalli.py); measuring meshes
+## doesn't work here, since an animated (skinned) mesh's bounds are oversized.
+func height() -> float:
+	return HEIGHT
 
 func current_animation() -> String:
 	return String(_player.current_animation) if _player else ""

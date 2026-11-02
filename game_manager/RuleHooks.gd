@@ -12,6 +12,7 @@ extends RefCounted
 ##   &"is_safe"             bool   {tile}                   safe-square checks (board.is_safe)
 ##   &"can_capture"         bool   {player (attacker), pawn (victim), victim_player, tile}
 ##   &"skip_turn"           bool   {player}                 when the turn passes to `player`
+##   &"can_be_swapped"      bool   {player (by), pawn, pawn_player}  a card swapping `pawn` (Aegis says no)
 ## Adding a hook = one rules.modify() call at the place the rule lives.
 
 func modify(_hook: StringName, value: Variant, _ctx: Dictionary = {}) -> Variant:
