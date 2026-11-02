@@ -1,5 +1,5 @@
 class_name Tunnel
-extends Node
+extends RoomService
 
 ## Gives a hosted game a public, secure (wss://) address with no router setup, using
 ## Cloudflare's free "quick tunnel" (the cloudflared tool, Apache-2.0 licensed).
@@ -8,11 +8,8 @@ extends Node
 ## cloudflared is used from next to the game exe if present, else downloaded once into
 ## user:// from a pinned release and checked against its SHA-256 before it ever runs.
 
-signal status_changed(text: String)
-## live = true once a real connection got through; false if Cloudflare was too slow to
-## confirm (the code usually starts working a minute later).
-signal opened(room_code: String, live: bool)
-signal failed(reason: String)
+## Signals (RoomService): opened(code, live) has live = false if Cloudflare was too slow
+## to confirm (the code usually starts working a minute later).
 
 ## Pinned so a future cloudflared release can't change behaviour under us. To update:
 ## take the new tag and its windows-amd64.exe sha256 from the GitHub release page.

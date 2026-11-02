@@ -1,308 +1,259 @@
 extends Control
 
-## Main menu (the game's first screen): pick your name, then Host a game or Join one.
-## Both lead to the lobby (LobbyView). Online only; the match itself is MainGame.tscn.
+## The main menu's shell (the game's first scene). It owns the courtyard stage behind the
+## menu, the palm-leaf panel, and the online session; the pages themselves are separate
+## MenuScreens from SCREENS (swap one by registering another under its name):
+##   home -> join -> connecting -> lobby, and settings / how_to_play / credits.
+## Screens only say what the player wants (navigate / action); this shell connects,
+## hosts and leaves through NetSession, and moves between screens. When the match
+## starts, the stage glides down into the seated view and MainGame takes over.
+## Layout: the panel sits in the screen's safe area and scrolls when it doesn't fit
+## (small screens, large UI size). Pad / keyboard: every screen offers its first
+## control; B / Esc goes back; PageUp / PageDown or the right stick scroll.
 ## Rejoining: the last room's seat token is saved, so joining the same room again
 ## mid-match puts you back in your seat.
 ## Developer command-line options (--host, --join, --bot...): see net/DevFlags.gd.
 
-const SETTINGS_PATH := "user://settings.cfg"
+const MUSIC := &"courtyard_dusk"
+const SCREENS := {
+	&"home": preload("res://menu/screens/HomeScreen.gd"),
+	&"join": preload("res://menu/screens/JoinScreen.gd"),
+	&"connecting": preload("res://menu/screens/ConnectingScreen.gd"),
+	&"lobby": preload("res://menu/screens/LobbyScreen.gd"),
+	&"settings": preload("res://menu/screens/SettingsScreen.gd"),
+	&"how_to_play": preload("res://menu/screens/HowToPlayScreen.gd"),
+	&"credits": preload("res://menu/screens/CreditsScreen.gd"),
+}
+const MARGIN := 24.0
+const PANEL_MIN_WIDTH := 400.0
+const PANEL_MAX_WIDTH := 560.0
+const PANEL_SHARE := 0.42
+const STICK_SCROLL_SPEED := 900.0
 
-enum Screen { HOME, JOIN, CONNECTING, LOBBY }
-
-var _screen: Screen = Screen.HOME
-var _content: VBoxContainer
+## Screen registry (id -> MenuScreen script); replace entries to plug in other screens.
+var screens: Dictionary = SCREENS.duplicate()
 var _net: NetSession
-var _settings := ConfigFile.new()
-var _name_edit: LineEdit
-var _address_edit: LineEdit
-var _lobby: LobbyView
+var _stage: MenuStage
+var _backdrop: ColorRect
+var _panel: PanelContainer
+var _scroll: ScrollContainer
+var _screen: MenuScreen
+var _screen_id: StringName
 var _autostart: int = 0
 var _host_port: int = NetSession.DEFAULT_PORT
 ## The server URL being joined (to save its seat token once welcomed).
 var _join_url: String = ""
 ## --no-tunnel (DevFlags): host on the local network only, no room code.
 var _no_tunnel: bool = false
-## Web: kept alive while JavaScript may call them.
-var _web_paste_callback: JavaScriptObject
-var _web_clipboard_callbacks: Array[JavaScriptObject] = []
 
 func _ready() -> void:
+	GameFonts.install()
+	Settings.reload() # another window on this machine may have changed them
+	Display.apply(get_tree())
+	GameInput.ensure(get_tree())
+	Sound.ensure(get_tree())
+	theme = MenuStyle.theme()
 	set_anchors_preset(Control.PRESET_FULL_RECT)
-	var bg := ColorRect.new()
-	bg.color = Color(0.16, 0.16, 0.19)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
-
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(560, 0)
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.11, 0.11, 0.14)
-	style.set_corner_radius_all(12)
-	style.set_content_margin_all(32)
-	panel.add_theme_stylebox_override("panel", style)
-	center.add_child(panel)
-	_content = VBoxContainer.new()
-	_content.add_theme_constant_override("separation", 16)
-	panel.add_child(_content)
-
-	_settings.load(SETTINGS_PATH)
-	_hook_web_paste()
+	_stage = MenuStage.new()
+	_stage.name = "Stage"
+	add_child(_stage)
+	_backdrop = ColorRect.new() # only where there's no 3D courtyard
+	_backdrop.color = Color(0.16, 0.11, 0.08)
+	_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_backdrop.visible = not _stage.enabled
+	add_child(_backdrop)
+	_panel = PanelContainer.new()
+	_panel.name = "Panel"
+	add_child(_panel)
+	_scroll = ScrollContainer.new()
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.follow_focus = true
+	_panel.add_child(_scroll)
+	_stage.figure_clicked.connect(func(figure: String):
+		if _screen:
+			_screen.on_figure_clicked(figure))
+	get_viewport().size_changed.connect(_layout)
+	_layout()
+	Platform.begin_paste_hook(_paste_into_focus)
 	# The session lives under the root (survives scene changes); add it once the root is free
 	_setup.call_deferred()
 
 func _setup() -> void:
+	Sound.music(MUSIC) # carries on into the match
+	Sound.ambience(&"")
 	_net = NetSession.ensure(get_tree())
 	_net.leave() # coming back from a match: start clean
+	_net.scene_loader = _launch_match
 	# Method callables (not lambdas) so the connections end when this screen is freed
 	_net.joined.connect(_on_joined)
 	_net.connection_failed.connect(_on_join_failed)
-	_net.disconnected.connect(_show_home)
+	_net.disconnected.connect(_on_disconnected)
 	_net.join_retrying.connect(_on_join_retrying)
 	if _apply_dev_flags():
 		return
 	# Web invite links: .../index.html?room=brave-lemon-kite-maple opens Join with the code filled in
-	var invited := _room_from_page_url()
+	var invited := Platform.invite_code()
 	if invited != "":
-		_settings.set_value("player", "last_address", invited)
-		_show_join()
+		Settings.set_value(Settings.PLAYER, Settings.LAST_ADDRESS, invited)
+		show_screen(&"join")
 	else:
-		_show_home()
+		show_screen(&"home")
 
-func _on_joined(_seat: int) -> void:
-	# Remember this seat: joining the same room again (e.g. after a reload) reclaims it
-	_settings.set_value("session", "url", _join_url)
-	_settings.set_value("session", "token", _net.get_token())
-	_settings.save(SETTINGS_PATH)
-	_show_lobby()
+# --- LAYOUT ---
+## The panel on the left of the safe area, as tall as it allows; the courtyard is
+## framed in the space to its right.
+func _layout() -> void:
+	var safe := Display.safe_rect(get_viewport())
+	var width := clampf(safe.size.x * PANEL_SHARE, minf(PANEL_MIN_WIDTH, safe.size.x - MARGIN * 2.0), PANEL_MAX_WIDTH)
+	_panel.position = safe.position + Vector2(MARGIN, MARGIN)
+	_panel.size = Vector2(width, safe.size.y - MARGIN * 2.0)
+	var screen_width := get_viewport().get_visible_rect().size.x
+	_stage.set_view_margin((_panel.position.x + width) / maxf(screen_width, 1.0))
 
-func _on_join_failed(reason: String) -> void:
-	_show_join(reason)
-
-func _on_join_retrying(attempt: int) -> void:
-	if _screen == Screen.CONNECTING:
-		_show_connecting(_settings.get_value("player", "last_address", ""), "Not answering yet, trying again (%d of %d)..." % [attempt, NetSession.JOIN_ATTEMPTS])
-
-## Web builds: the room code from the page address, if the invite link carried one.
-func _room_from_page_url() -> String:
-	if not OS.has_feature("web"):
-		return ""
-	var room: Variant = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('room') || ''")
-	return str(room).strip_edges() if room != null else ""
-
-# --- PASTE ---
-## Godot's web runtime calls preventDefault() on every key press on its canvas, which
-## also cancels the browser's paste. While the menu is open, a capture listener lets
-## Ctrl/Cmd+V through to the browser (Godot never sees it), and the "paste" event
-## that follows puts the text into whichever text field has focus.
-const WEB_PASTE_HOOK := """
-if (!window.ashtaPasteHook) {
-	window.ashtaPasteHook = true;
-	window.addEventListener('keydown', function (e) {
-		if (window.ashtaPasteEnabled && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-			e.stopImmediatePropagation();
-		}
-	}, true);
-}
-window.ashtaPasteEnabled = true;
-"""
-
-func _hook_web_paste() -> void:
-	if not OS.has_feature("web"):
+# --- SCREENS ---
+## Shows a registered screen. args go to the screen (e.g. {"error": "..."}).
+func show_screen(id: StringName, args: Dictionary = {}) -> void:
+	if not screens.has(id):
+		push_error("StartScreen: no screen called %s" % id)
 		return
-	JavaScriptBridge.eval(WEB_PASTE_HOOK)
-	_web_paste_callback = JavaScriptBridge.create_callback(_on_web_paste)
-	JavaScriptBridge.get_interface("window").addEventListener("paste", _web_paste_callback)
+	if _screen:
+		_scroll.remove_child(_screen)
+		_screen.queue_free()
+	_screen_id = id
+	_screen = (screens[id] as GDScript).new()
+	_screen.name = String(id).to_pascal_case()
+	_screen.net = _net
+	_screen.stage = _stage
+	_screen.args = args
+	_screen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_screen.navigate.connect(show_screen)
+	_screen.action.connect(_on_action)
+	_scroll.add_child(_screen)
+	_scroll.scroll_vertical = 0
+	GameInput.offer_focus(get_tree(), _screen.first_focus())
 
-func _exit_tree() -> void:
-	if OS.has_feature("web"):
-		JavaScriptBridge.eval("window.ashtaPasteEnabled = false;")
-		if _web_paste_callback:
-			JavaScriptBridge.get_interface("window").removeEventListener("paste", _web_paste_callback)
+func _on_action(action_name: StringName, args: Dictionary) -> void:
+	match action_name:
+		&"host":
+			_host(_host_port)
+		&"join":
+			_join(String(args.get("address", "")))
+		&"paste":
+			Platform.read_clipboard(_paste_address, "Paste the room code (or the whole invite) here:")
+		&"cancel_join":
+			_net.leave()
+			show_screen(&"join")
+		&"leave":
+			_net.leave()
+			show_screen(&"home")
 
-func _on_web_paste(args: Array) -> void:
-	var data: Variant = args[0].clipboardData
-	if data != null:
-		_paste_into_focus(str(data.getData("text")))
-
-## Web: the browser's paste event does the pasting (in case a Ctrl+V still reaches
-## Godot, its own paste would use its internal clipboard, usually empty or stale there).
-func _input(event: InputEvent) -> void:
-	if OS.has_feature("web") and event is InputEventKey and event.pressed \
-			and event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed) \
-			and get_viewport().gui_get_focus_owner() is LineEdit:
+func _unhandled_input(event: InputEvent) -> void:
+	if _screen and event.is_action_pressed("pick_cancel"):
+		_screen.go_back()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("ui_page_down") or event.is_action_pressed("ui_page_up"):
+		_scroll.scroll_vertical += int(_scroll.size.y * 0.8) * (1 if event.is_action_pressed("ui_page_down") else -1)
 		get_viewport().set_input_as_handled()
 
+func _process(delta: float) -> void:
+	# Pads: the right stick scrolls long pages (credits, rules)
+	var stick := Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+	if absf(stick) > 0.2 and _scroll:
+		_scroll.scroll_vertical += int(stick * STICK_SCROLL_SPEED * delta)
+
+# --- PASTE (Platform does the web part) ---
+func _exit_tree() -> void:
+	Platform.end_paste_hook()
+
+func _input(event: InputEvent) -> void:
+	if Platform.is_native_paste_blocked(event) and get_viewport().gui_get_focus_owner() is LineEdit:
+		get_viewport().set_input_as_handled()
+
+## Web: the browser's paste goes into whichever text box has focus (an invite into the
+## join box becomes its room code).
 func _paste_into_focus(text: String) -> void:
 	var edit := get_viewport().gui_get_focus_owner() as LineEdit
 	if edit == null or text.strip_edges() == "":
 		return
-	if edit == _address_edit:
-		_set_address(text) # an invite becomes its room code
+	if _screen is JoinScreen and edit.name == "JoinAddress":
+		(_screen as JoinScreen).paste_text(text)
 	else:
 		edit.insert_text_at_caret(text.strip_edges())
 
-## The Paste button next to the address field (also for phones, which have no Ctrl+V).
-## Web: read the clipboard if the page may (not inside itch.io's frame, which isn't
-## given clipboard access); otherwise ask in the browser's own text box, where
-## pasting always works.
-func _paste_address() -> void:
-	if not OS.has_feature("web"):
-		_set_address(DisplayServer.clipboard_get())
-		return
-	var clipboard: Variant = JavaScriptBridge.get_interface("navigator").clipboard
-	if clipboard == null:
-		_ask_browser_for_address()
-		return
-	var on_text := JavaScriptBridge.create_callback(func(args: Array): _set_address(str(args[0])))
-	var on_error := JavaScriptBridge.create_callback(func(_args: Array): _ask_browser_for_address())
-	_web_clipboard_callbacks = [on_text, on_error]
-	clipboard.readText().then(on_text, on_error)
+func _paste_address(text: String) -> void:
+	if _screen is JoinScreen:
+		(_screen as JoinScreen).paste_text(text)
 
-func _ask_browser_for_address() -> void:
-	var typed: Variant = JavaScriptBridge.get_interface("window").prompt("Paste the room code (or the whole invite) here:", "")
-	if typed != null and str(typed).strip_edges() != "":
-		_set_address(str(typed))
-	elif _address_edit and is_instance_valid(_address_edit):
-		_address_edit.grab_focus()
-
-## Fills the address box with what was pasted (an invite is reduced to its room code).
-func _set_address(text: String) -> void:
-	if _address_edit and is_instance_valid(_address_edit) and text.strip_edges() != "":
-		_address_edit.text = NetSession.find_address(text)
-		_address_edit.caret_column = _address_edit.text.length()
-
-# --- SCREENS ---
-func _clear() -> void:
-	for child in _content.get_children():
-		child.queue_free()
-	_lobby = null
-	_address_edit = null
-
-func _show_home(error: String = "") -> void:
-	_clear()
-	_screen = Screen.HOME
-	_content.add_child(MenuWidgets.label("Ashta Chemma", 44))
-	_content.add_child(MenuWidgets.label("Online with friends", 18, MenuWidgets.MUTED))
-
-	_content.add_child(MenuWidgets.label("Your name", 16, MenuWidgets.MUTED, HORIZONTAL_ALIGNMENT_LEFT))
-	_name_edit = MenuWidgets.line_edit(_settings.get_value("player", "name", ""), "Player")
-	_name_edit.name = "PlayerName"
-	_name_edit.max_length = GameConfig.NAME_MAX_LENGTH
-	_content.add_child(_name_edit)
-
-	var host := MenuWidgets.button("Host a game")
-	host.name = "HostGame"
-	host.pressed.connect(_host)
-	# Browsers can't accept connections, so only desktop builds can host
-	host.visible = not OS.has_feature("web")
-	_content.add_child(host)
-	var join := MenuWidgets.button("Join a game")
-	join.name = "JoinGame"
-	join.pressed.connect(_show_join)
-	_content.add_child(join)
-	_add_error(error)
-	_content.add_child(MenuWidgets.label("v" + GameConfig.GAME_VERSION, 12, Color(0.45, 0.45, 0.5)))
-
-func _show_join(error: String = "") -> void:
-	_remember_name()
-	_clear()
-	_screen = Screen.JOIN
-	_content.add_child(MenuWidgets.label("Join a game", 32))
-	_content.add_child(MenuWidgets.label("Type or paste the room code the host gave you (or an address like 192.168.1.23:9080 on the same network).", 15, MenuWidgets.MUTED))
-	var address_row := HBoxContainer.new()
-	address_row.add_theme_constant_override("separation", 8)
-	_address_edit = MenuWidgets.line_edit(_settings.get_value("player", "last_address", ""), "room code, e.g. brave-lemon-kite-maple")
-	_address_edit.name = "JoinAddress"
-	_address_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_address_edit.text_submitted.connect(_join)
-	address_row.add_child(_address_edit)
-	var paste := MenuWidgets.button("Paste", Vector2(96, 44))
-	paste.name = "PasteAddress"
-	paste.focus_mode = Control.FOCUS_NONE # keep the caret in the box
-	paste.pressed.connect(_paste_address)
-	address_row.add_child(paste)
-	_content.add_child(address_row)
-
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 12)
-	var back := MenuWidgets.button("Back", Vector2(140, 48))
-	back.pressed.connect(func(): _show_home())
-	actions.add_child(back)
-	var go := MenuWidgets.button("Join")
-	go.name = "JoinConfirm"
-	go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	go.pressed.connect(func(): _join(_address_edit.text))
-	actions.add_child(go)
-	_content.add_child(actions)
-	_add_error(error)
-
-func _show_connecting(where: String, note: String = "") -> void:
-	_clear()
-	_screen = Screen.CONNECTING
-	_content.add_child(MenuWidgets.label("Connecting...", 28))
-	_content.add_child(MenuWidgets.label(where, 15, MenuWidgets.MUTED))
-	if note != "":
-		_content.add_child(MenuWidgets.label(note, 15, MenuWidgets.MUTED))
-	var cancel := MenuWidgets.button("Cancel", Vector2(160, 48))
-	cancel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	cancel.pressed.connect(func():
-		_net.leave()
-		_show_join())
-	_content.add_child(cancel)
-
-func _show_lobby() -> void:
-	_clear()
-	_screen = Screen.LOBBY
-	_lobby = LobbyView.new(_net, _host_port, _autostart)
-	_autostart = 0
-	_lobby.left.connect(func():
-		_net.leave()
-		_show_home())
-	_content.add_child(_lobby)
-
-# --- ACTIONS ---
-func _player_name() -> String:
-	var typed := _name_edit.text.strip_edges() if _name_edit and is_instance_valid(_name_edit) else ""
-	return typed if typed != "" else "Player"
-
-func _remember_name() -> void:
-	if _name_edit and is_instance_valid(_name_edit):
-		_settings.set_value("player", "name", _name_edit.text.strip_edges())
-		_settings.save(SETTINGS_PATH)
+# --- CONNECTING ---
+## The name to join with: the platform account's, else the one saved on the home screen.
+func _saved_name() -> String:
+	var system_name := Platform.system_player_name()
+	if system_name != "":
+		return system_name
+	var saved := String(Settings.get_value(Settings.PLAYER, Settings.NAME, "")).strip_edges()
+	return saved if saved != "" else "Player"
 
 func _host(port: int = NetSession.DEFAULT_PORT) -> void:
-	_remember_name()
+	_net.local_figure = HomeScreen.saved_figure()
 	_host_port = port
-	var err := _net.host(_player_name(), port)
+	var err := _net.host(_saved_name(), port)
 	if err != OK:
-		_show_home("Couldn't host on port %d (%s). Is another game already hosting?" % [port, error_string(err)])
+		show_screen(&"home", {"error": "Couldn't host on port %d (%s). Is another game already hosting?" % [port, error_string(err)]})
 		return
 	_show_lobby()
 	if _no_tunnel:
-		_lobby.show_no_room_code("Room code off (--no-tunnel).")
+		(_screen as LobbyScreen).show_no_room_code("Room code off (--no-tunnel).")
 	else:
 		_net.open_room_code(port)
 
 func _join(typed: String) -> void:
-	var address := NetSession.find_address(typed)
-	var url := NetSession.address_to_url(address)
+	var address := _net.transport.find_address(typed)
+	var url := _net.transport.to_target(address)
 	if url == "":
-		_show_join("Type the address the host gave you.")
+		show_screen(&"join", {"error": "Type the address the host gave you."})
 		return
-	_settings.set_value("player", "last_address", address)
-	_settings.save(SETTINGS_PATH)
+	Settings.set_value(Settings.PLAYER, Settings.LAST_ADDRESS, address)
 	_join_url = url
 	# Same room as last time: offer our old seat's token (only used if a match is running)
-	var token: String = _settings.get_value("session", "token", "") if _settings.get_value("session", "url", "") == url else ""
-	var err := _net.join(url, _settings.get_value("player", "name", "Player"), token)
+	var token: String = Settings.get_value(Settings.SESSION, Settings.SESSION_TOKEN, "") \
+		if Settings.get_value(Settings.SESSION, Settings.SESSION_URL, "") == url else ""
+	_net.local_figure = HomeScreen.saved_figure()
+	var err := _net.join(url, _saved_name(), token)
 	if err != OK:
-		_show_join("Couldn't connect (%s)." % error_string(err))
+		show_screen(&"join", {"error": "Couldn't connect (%s)." % error_string(err)})
 		return
-	_show_connecting(address)
+	show_screen(&"connecting", {"where": address})
+
+func _show_lobby() -> void:
+	show_screen(&"lobby", {"host_port": _host_port, "autostart": _autostart})
+	_autostart = 0
+
+func _on_joined(_seat: int) -> void:
+	# Remember this seat: joining the same room again (e.g. after a reload) reclaims it
+	Settings.set_value(Settings.SESSION, Settings.SESSION_URL, _join_url)
+	Settings.set_value(Settings.SESSION, Settings.SESSION_TOKEN, _net.get_token())
+	_show_lobby()
+
+func _on_join_failed(reason: String) -> void:
+	show_screen(&"join", {"error": reason})
+
+func _on_disconnected(reason: String) -> void:
+	show_screen(&"home", {"error": reason})
+
+func _on_join_retrying(attempt: int) -> void:
+	if _screen_id == &"connecting":
+		show_screen(&"connecting", {"where": Settings.get_value(Settings.PLAYER, Settings.LAST_ADDRESS, ""),
+			"note": "Not answering yet, trying again (%d of %d)..." % [attempt, NetSession.JOIN_ATTEMPTS]})
+
+## The match starts (NetSession's scene_loader): the panel fades, the courtyard glides
+## down to this player's seat, then MainGame replaces the menu.
+func _launch_match(setup: MatchSetup) -> void:
+	var sides := GameConfig.seats_for(setup.players.size())
+	var seat := maxi(_net.local_seat, 0)
+	create_tween().tween_property(_panel, "modulate:a", 0.0, 0.35)
+	await _stage.to_match(sides[seat] if seat < sides.size() else 0)
+	setup.launch(get_tree())
 
 ## Developer command-line options (DevFlags; debug builds only). Returns true if used.
 func _apply_dev_flags() -> bool:
@@ -310,9 +261,9 @@ func _apply_dev_flags() -> bool:
 	if opts.is_empty():
 		return false
 	if opts.has("--name"):
-		_settings.set_value("player", "name", opts["--name"])
+		Settings.set_value(Settings.PLAYER, Settings.NAME, opts["--name"])
 	DevFlags.apply_tooling(opts, get_tree())
-	_show_home()
+	show_screen(&"home")
 	_no_tunnel = opts.has("--no-tunnel")
 	if opts.has("--host"):
 		_host_port = int(opts.get("--port", NetSession.DEFAULT_PORT))
@@ -320,11 +271,8 @@ func _apply_dev_flags() -> bool:
 		_host(_host_port)
 		if opts.has("--no-cards"):
 			_net.set_setting("cards", false)
+		if opts.has("--open-draft"):
+			_net.set_setting("draft", GameConfig.DRAFT_OPEN)
 	else:
 		_join(opts["--join"])
 	return true
-
-func _add_error(text: String) -> void:
-	var error := MenuWidgets.label(text, 15, MenuWidgets.ERROR)
-	error.visible = text != ""
-	_content.add_child(error)

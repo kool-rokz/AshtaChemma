@@ -7,21 +7,26 @@ extends RefCounted
 
 const GAME_SCENE_PATH := "res://MainGame.tscn"
 
-## One {"name", "color_name"} entry per player, in seat order.
+## One {"name", "color_name", "figure"} entry per player, in seat order.
 var players: Array[Dictionary] = []
 ## Experimental card layer (cards/CardManager). false = the plain game.
 var cards_enabled: bool = false
 ## "Skill throws": a key of GameConfig.THROW_SKILL_KEEP.
 var throw_skill: String = GameConfig.DEFAULT_THROW_SKILL
+## How cards are drafted: GameConfig.DRAFT_PRIVATE or DRAFT_OPEN.
+var draft_mode: String = GameConfig.DEFAULT_DRAFT
 ## Rejoin: a MatchController snapshot to continue from instead of starting a new match.
 var resume: Dictionary = {}
 
-static func make(player_list: Array, cards: bool = false, skill: String = GameConfig.DEFAULT_THROW_SKILL) -> MatchSetup:
+static func make(player_list: Array, cards: bool = false, skill: String = GameConfig.DEFAULT_THROW_SKILL,
+		draft: String = GameConfig.DEFAULT_DRAFT) -> MatchSetup:
 	var setup := MatchSetup.new()
 	for p in player_list:
-		setup.players.append({"name": String(p["name"]), "color_name": String(p["color_name"])})
+		setup.players.append({"name": String(p["name"]), "color_name": String(p["color_name"]),
+			"figure": GameConfig.figure_or_default(String(p.get("figure", "")))})
 	setup.cards_enabled = cards
 	setup.throw_skill = skill if GameConfig.THROW_SKILL_KEEP.has(skill) else "off"
+	setup.draft_mode = draft if draft in GameConfig.DRAFT_MODES else GameConfig.DEFAULT_DRAFT
 	return setup
 
 ## Default for running MainGame.tscn on its own (F6): two local players, no cards.

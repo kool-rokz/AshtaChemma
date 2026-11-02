@@ -4,6 +4,11 @@ extends Node2D
 ## Draws on top of the board art (below pawns): homebases in player colours (the active
 ## player's pulses), safe-square crosses, the active player's inner-ring entry arrow,
 ## the tile under the mouse, and a numbered preview of a pending move.
+## It also holds that display state for other views of the board: `changed` fires on
+## every update and `state()` returns a copy (the 3D board draws from it).
+
+## The display state changed (see state()).
+signal changed
 
 const SAFE_MARK_COLOR := Color(0.25, 0.25, 0.3, 0.55)
 const HOVER_COLOR := Color(1, 1, 1, 0.8)
@@ -21,6 +26,7 @@ var hovered_tile: int = -1:
 	set(value):
 		hovered_tile = value
 		queue_redraw()
+		changed.emit()
 
 ## Inner-ring entry arrow before the player has a capture.
 const LOCKED_ARROW_COLOR := Color(0.35, 0.35, 0.4, 0.75)
@@ -48,6 +54,7 @@ func _process(_delta: float) -> void:
 func set_homebases(entries: Array[Dictionary]) -> void:
 	_homebases = entries
 	queue_redraw()
+	changed.emit()
 
 ## Highlights whose turn it is and their inner-ring entry (grey + lock until unlocked).
 func set_active_player(homebase: int, arrow_from: int, arrow_to: int, color: Color, unlocked: bool) -> void:
@@ -58,27 +65,42 @@ func set_active_player(homebase: int, arrow_from: int, arrow_to: int, color: Col
 	_arrow_unlocked = unlocked
 	set_process(true)
 	queue_redraw()
+	changed.emit()
 
 ## Tiles in travel order; the last one is the destination.
 func show_move_preview(tiles: Array[int], end: GameManager.MoveEnd) -> void:
 	_preview_tiles = tiles
 	_preview_end = end
 	queue_redraw()
+	changed.emit()
 
 func set_target_tiles(tiles: Array[int]) -> void:
 	_target_tiles = tiles
 	set_process(true)
 	queue_redraw()
+	changed.emit()
 
 func set_marked_tiles(tiles: Dictionary) -> void:
 	_marked_tiles = tiles
 	queue_redraw()
+	changed.emit()
 
 func clear_move_preview() -> void:
 	if _preview_tiles.is_empty():
 		return
 	_preview_tiles = []
 	queue_redraw()
+	changed.emit()
+
+## A copy of what is shown: {homebases: [{tile, color}], active_homebase, active_color,
+## arrow_from, arrow_to, arrow_unlocked, preview_tiles, preview_end, target_tiles,
+## marked_tiles (tile -> Color), hovered_tile}.
+func state() -> Dictionary:
+	return {"homebases": _homebases.duplicate(), "active_homebase": _active_homebase,
+		"active_color": _active_color, "arrow_from": _arrow_from, "arrow_to": _arrow_to,
+		"arrow_unlocked": _arrow_unlocked, "preview_tiles": _preview_tiles.duplicate(),
+		"preview_end": _preview_end, "target_tiles": _target_tiles.duplicate(),
+		"marked_tiles": _marked_tiles.duplicate(), "hovered_tile": hovered_tile}
 
 func _draw() -> void:
 	var data := board.board_data

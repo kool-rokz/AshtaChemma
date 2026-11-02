@@ -10,8 +10,11 @@ var turn_count: int = 0
 var max_turns: int = 2000 # Safety limit to prevent infinite loops (like a stalemate)
 ## --cards: draft random hands and play a random legal card (random targets) half the time.
 var use_cards: bool = false
+## --open-draft (with --cards): the open snake draft instead of private picks.
+var open_draft: bool = false
 var card_manager: CardManager
-var roll_button: Button
+var hud: HUD
+var controller: MatchController
 
 func _ready() -> void:
 	print("========================================")
@@ -28,7 +31,9 @@ func _run_simulation() -> void:
 			player_count = clampi(int(arg.get_slice("=", 1)), GameConfig.MIN_PLAYERS, GameConfig.MAX_PLAYERS)
 		elif arg == "--cards":
 			use_cards = true
-	print("Players: %d%s" % [player_count, " (with cards)" if use_cards else ""])
+		elif arg == "--open-draft":
+			open_draft = true
+	print("Players: %d%s%s" % [player_count, " (with cards)" if use_cards else "", ", open draft" if open_draft else ""])
 	
 	# 1. Load and Instantiate the Main Game Scene
 	var packed_scene = load(GAME_SCENE_PATH)
@@ -38,8 +43,10 @@ func _run_simulation() -> void:
 		return
 
 	var main_scene: Node = packed_scene.instantiate()
-	MatchSetup.make(GameConfig.default_players(player_count), use_cards).apply_to(main_scene)
-	roll_button = (main_scene.get_node("HUD") as HUD).roll_button
+	MatchSetup.make(GameConfig.default_players(player_count), use_cards, GameConfig.DEFAULT_THROW_SKILL,
+		GameConfig.DRAFT_OPEN if open_draft else GameConfig.DRAFT_PRIVATE).apply_to(main_scene)
+	hud = main_scene.get_node("HUD")
+	controller = main_scene.get_node("MatchController")
 	if use_cards:
 		card_manager = main_scene.get_node("CardManager")
 		card_manager.auto_draft = true
@@ -91,11 +98,10 @@ func _print_board_state() -> void:
 				print("P%d %s: tile %d (path step %d)" % [i + 1, p.name, p.current_tile_index, path.find(p.current_tile_index)])
 
 func _simulate_roll() -> void:
-	# Emulate a UI click on the roll button
-	if not roll_button.disabled:
+	# A quick toss whenever this screen may throw (what a click on the shells does)
+	if hud.throw_allowed:
 		turn_count += 1
-		# Directly emitting 'pressed' simulates a button click perfectly
-		roll_button.pressed.emit()
+		controller.throw_shells()
 		
 ## Half the time, play a random playable card. Returns true if one was started.
 func _simulate_card() -> bool:

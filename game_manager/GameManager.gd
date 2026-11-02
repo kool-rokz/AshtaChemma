@@ -705,6 +705,32 @@ func get_move_preview(pawn: Pawn) -> Dictionary:
 	return {"pawn": pawn, "tiles": tiles, "end": end, "victim": victim}
 
 # --- HELPERS ---
+## Near misses after `mover` landed: opponents' pawns one step short of it or one step
+## past it along its own path, on a square where it could have captured them (not
+## safe, not protected). Read-only; views use it to cheer an escape.
+func get_near_misses(mover: Pawn) -> Array[Pawn]:
+	var path := _get_path(mover)
+	var idx := path.find(mover.current_tile_index)
+	var result: Array[Pawn] = []
+	if idx < 0:
+		return result
+	var locked: bool = not player_has_killed[mover.team_id]
+	var around: Array[int] = []
+	for offset in [-1, 1]:
+		var step: int = idx + offset
+		if locked:
+			step = posmod(step, OUTER_RING_STEPS) # a locked pawn circles the outer ring
+		elif step < 0 or step >= path.size():
+			continue
+		around.append(path[step])
+	for tile in around:
+		if board.is_safe(tile):
+			continue
+		for pawn in get_pawns_at_tile(tile):
+			if pawn.team_id != mover.team_id and _can_capture(mover, pawn, tile) and not result.has(pawn):
+				result.append(pawn)
+	return result
+
 func _get_movable_pawns(roll: int) -> Array[Pawn]:
 	var valid: Array[Pawn] = []
 	var container = pawn_containers[current_player_index]

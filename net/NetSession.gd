@@ -3,7 +3,7 @@ extends Node
 
 ## The online connection, alive from the menu through the match (it sits under the
 ## scene-tree root, so scene changes don't free it). Uses Godot's high-level
-## multiplayer, so the transport is swappable: WebSocket today, WebRTC later.
+## multiplayer, so the transport is swappable (Platform.transport(): WebSocket today).
 ##
 ## Host (peer 1) is the authority and plays seat 0. Messages:
 ##   client -> host   hello(name, token, ver)  join, or rejoin with the token (ver = GameConfig.PROTOCOL_VERSION)
@@ -24,8 +24,9 @@ extends Node
 ## Version check across builds: Godot numbers a node's RPCs by method name in sorted
 ## order, so _rpc_hello and _rpc_refused must keep their slots for an old build to be
 ## told "version doesn't match". Don't add RPCs whose names sort before _rpc_refused.
-## Transport: only _open_server() / _open_client() know it's WebSocket; everything else
-## uses Godot's MultiplayerAPI, so WebRTC (or anything else) is a swap of those two.
+## Transport: `transport` (a Transport) opens the connection and reads addresses;
+## everything else uses Godot's MultiplayerAPI. Room codes come from a RoomService
+## (Platform.room_service(); none on platforms that can't give them out).
 
 signal roster_changed(roster: Array)
 ## Room settings changed (host's choices, e.g. {"cards": true, "throw_skill": "light"}).
@@ -46,22 +47,22 @@ signal reconnecting(attempt: int)
 
 enum Role { NONE, HOST, CLIENT }
 
-const DEFAULT_PORT := 9080
+const DEFAULT_PORT := WebSocketTransport.DEFAULT_PORT
 const NODE_NAME := "NetSession"
 ## Join attempts before giving up (a just-created room code can take a few seconds to resolve).
 const JOIN_ATTEMPTS := 6
 const JOIN_RETRY_DELAY := 3.0
-## Godot's default (3 s) is too short for a first connection through a new tunnel
-## (TLS + Cloudflare routing) or slow Wi-Fi.
-const HANDSHAKE_TIMEOUT := 15.0
 ## Mid-match reconnects before giving up (with the host's ABSENT_TURN_GRACE in mind).
 const RECONNECT_ATTEMPTS := 5
 const RECONNECT_DELAY := 3.0
-const DEFAULT_SETTINGS := {"cards": true, "throw_skill": GameConfig.DEFAULT_THROW_SKILL}
+const DEFAULT_SETTINGS := {"cards": true, "throw_skill": GameConfig.DEFAULT_THROW_SKILL, "draft": GameConfig.DEFAULT_DRAFT}
 
 var role: Role = Role.NONE
 var local_seat: int = -1
 var local_name: String = ""
+## This player's pawn figure (GameConfig.FIGURES), chosen on the main menu; sent to the
+## host once welcomed into a room.
+var local_figure: String = GameConfig.FIGURES.keys()[0]
 ## Host: [{seat, name, color_name, peer, token, connected, syncing}]. Clients get
 ## {seat, name, color_name, connected}; a rejoining player counts as connected once synced.
 var roster: Array = []
@@ -77,7 +78,7 @@ var _controller: MatchController
 var _pending_events: Array = []
 var _pending_private: Array = []
 var _token: String = ""
-var _tunnel: Tunnel
+var _rooms: RoomService
 var _join_url: String = ""
 var _join_attempt: int = 0
 var _reconnect_attempt: int = 0
@@ -86,43 +87,12 @@ var _join_generation: int = 0
 ## Host: the current room code ("" until the tunnel is open).
 var room_code: String = ""
 var _rng := RandomNumberGenerator.new()
+## How this game connects (see Transport); tests may swap it before host()/join().
+var transport: Transport = Platform.transport()
 
 ## The session under the scene-tree root, if any.
 static func find(tree: SceneTree) -> NetSession:
 	return tree.root.get_node_or_null(NODE_NAME) as NetSession
-
-## What a player typed -> a WebSocket URL: "192.168.1.5:9080" -> "ws://192.168.1.5:9080";
-## a bare host gets the default port; ws:// and wss:// URLs pass through. "" if empty.
-static func address_to_url(address: String) -> String:
-	var text := address.strip_edges()
-	if text == "":
-		return ""
-	if text.begins_with("ws://") or text.begins_with("wss://"):
-		return text
-	if text.begins_with("https://"):
-		return "wss://" + text.trim_prefix("https://").trim_suffix("/")
-	if text.begins_with("http://"):
-		return "ws://" + text.trim_prefix("http://").trim_suffix("/")
-	if Tunnel.is_room_code(text):
-		return Tunnel.code_to_url(text)
-	if text.ends_with(Tunnel.DOMAIN):
-		return "wss://" + text
-	if not ":" in text:
-		text += ":%d" % DEFAULT_PORT
-	return "ws://" + text
-
-## The address inside pasted text: a whole invite ("Join my game! Room code: x-y-z")
-## or a link ("...index.html?room=x-y-z") gives the room code; anything else is kept.
-static func find_address(text: String) -> String:
-	var t := text.strip_edges()
-	if " " in t or "room=" in t:
-		for word in t.replace("
-", " ").replace("	", " ").split(" ", false):
-			var candidate: String = word.get_slice("room=", 1) if "room=" in word else word
-			candidate = candidate.get_slice("&", 0).trim_prefix("(").trim_suffix(")").trim_suffix(",").trim_suffix(".")
-			if Tunnel.is_room_code(candidate):
-				return candidate
-	return t
 
 ## The session under the root, created on first use.
 static func ensure(tree: SceneTree) -> NetSession:
@@ -155,13 +125,14 @@ func host(player_name: String, port: int = DEFAULT_PORT) -> Error:
 	role = Role.HOST
 	local_seat = 0
 	local_name = player_name
-	roster = [{"seat": 0, "name": player_name, "color_name": _free_color(), "peer": 1,
-		"token": _new_token(), "connected": true}]
+	roster = [{"seat": 0, "name": player_name, "color_name": _free_color(),
+		"figure": GameConfig.figure_or_default(local_figure), "peer": 1, "token": _new_token(), "connected": true}]
 	_token = roster[0]["token"]
 	roster_changed.emit(public_roster())
 	return OK
 
-## url like "ws://127.0.0.1:9080" or "wss://<code>.trycloudflare.com".
+## url: what transport.to_target() made of the typed address, like
+## "ws://127.0.0.1:9080" or "wss://<code>.trycloudflare.com".
 ## token reclaims a previous seat in this room.
 func join(url: String, player_name: String, token: String = "") -> Error:
 	leave()
@@ -179,27 +150,12 @@ func _connect_client() -> Error:
 	role = Role.CLIENT
 	return OK
 
-# --- TRANSPORT (the only WebSocket-specific code) ---
+# --- TRANSPORT ---
 func _open_server(port: int) -> Error:
-	var peer := WebSocketMultiplayerPeer.new()
-	peer.handshake_timeout = HANDSHAKE_TIMEOUT
-	var err := peer.create_server(port)
-	if err != OK:
-		return err
-	# Star network: clients only talk to the host, and don't need to hear about each other
-	if multiplayer is SceneMultiplayer:
-		(multiplayer as SceneMultiplayer).server_relay = false
-	multiplayer.multiplayer_peer = peer
-	return OK
+	return transport.open_server(multiplayer, port)
 
 func _open_client(url: String) -> Error:
-	var peer := WebSocketMultiplayerPeer.new()
-	peer.handshake_timeout = HANDSHAKE_TIMEOUT
-	var err := peer.create_client(url)
-	if err != OK:
-		return err
-	multiplayer.multiplayer_peer = peer
-	return OK
+	return transport.open_client(multiplayer, url)
 
 func _on_connection_failed() -> void:
 	if role == Role.CLIENT and in_match:
@@ -216,31 +172,32 @@ func _on_connection_failed() -> void:
 	_fail("Couldn't reach the host. Check the room code, and that the host is still in the lobby.")
 
 # --- ROOM CODE (host) ---
-## Host: open a Cloudflare quick tunnel so friends anywhere (and browsers) can join with a code.
+## Host: get a room code (a Cloudflare quick tunnel today) so friends anywhere, and
+## browsers, can join with it.
 func open_room_code(port: int = DEFAULT_PORT) -> void:
 	if not is_host():
 		return
-	if not Tunnel.is_supported():
-		room_code_failed.emit("Room codes need the Windows build.")
-		return
-	if _tunnel == null:
-		_tunnel = Tunnel.new()
-		_tunnel.name = "Tunnel"
-		add_child(_tunnel)
-		_tunnel.status_changed.connect(func(text): room_status.emit(text))
-		_tunnel.opened.connect(func(code, live):
+	if _rooms == null:
+		_rooms = Platform.room_service()
+		if _rooms == null:
+			room_code_failed.emit("Room codes need the Windows build.")
+			return
+		_rooms.name = "RoomService"
+		add_child(_rooms)
+		_rooms.status_changed.connect(func(text): room_status.emit(text))
+		_rooms.opened.connect(func(code, live):
 			room_code = code
 			room_code_ready.emit(code, live))
-		_tunnel.failed.connect(func(reason): room_code_failed.emit(reason))
+		_rooms.failed.connect(func(reason): room_code_failed.emit(reason))
 	room_code = ""
-	_tunnel.open(port)
+	_rooms.open(port)
 
 func leave() -> void:
 	if multiplayer.multiplayer_peer and not multiplayer.multiplayer_peer is OfflineMultiplayerPeer:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = null
-	if _tunnel:
-		_tunnel.close()
+	if _rooms:
+		_rooms.close()
 	room_code = ""
 	_join_generation += 1
 	_reconnect_attempt = 0
@@ -259,7 +216,7 @@ func get_token() -> String:
 ## Roster without secrets, as sent to clients.
 func public_roster() -> Array:
 	return roster.map(func(entry): return {"seat": entry["seat"], "name": entry["name"],
-		"color_name": entry["color_name"], "connected": _is_present(entry)})
+		"color_name": entry["color_name"], "figure": entry.get("figure", ""), "connected": _is_present(entry)})
 
 ## Host: is this seat's player here and up to date (connected, not still rejoining)?
 func is_seat_present(seat: int) -> bool:
@@ -387,6 +344,28 @@ func _set_color(seat: int, color_name: String) -> void:
 			entry["color_name"] = color_name
 	_broadcast_roster()
 
+## Switch this player's pawn figure (any player may have any figure).
+func request_figure(figure: String) -> void:
+	local_figure = GameConfig.figure_or_default(figure)
+	if is_host():
+		_set_figure(local_seat, local_figure)
+	elif is_online():
+		_rpc_request_figure.rpc_id(1, local_figure)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_request_figure(figure: String) -> void:
+	var seat := _seat_of_peer(multiplayer.get_remote_sender_id())
+	if is_host() and seat >= 0:
+		_set_figure(seat, figure)
+
+func _set_figure(seat: int, figure: String) -> void:
+	if in_match or not GameConfig.FIGURES.has(figure):
+		return
+	for entry in roster:
+		if entry["seat"] == seat:
+			entry["figure"] = figure
+	_broadcast_roster()
+
 # --- LOBBY ---
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_hello(player_name: String, token: String, protocol: int) -> void:
@@ -417,7 +396,7 @@ func _rpc_hello(player_name: String, token: String, protocol: int) -> void:
 			_rpc_refused.rpc_id(peer_id, "The room is full.")
 			return
 		entry = {"seat": roster.size(), "name": player_name.strip_edges().left(GameConfig.NAME_MAX_LENGTH),
-			"color_name": _free_color(), "token": _new_token()}
+			"color_name": _free_color(), "figure": GameConfig.figure_or_default(""), "token": _new_token()}
 		if entry["name"] == "":
 			entry["name"] = "Player %d" % (entry["seat"] + 1)
 		entry["name"] = _unique_name(entry["name"])
@@ -455,6 +434,7 @@ func _rpc_sync(config: Dictionary, snapshot: Dictionary) -> void:
 func _rpc_welcome(seat: int, token: String) -> void:
 	local_seat = seat
 	_token = token
+	request_figure(local_figure) # ignored by the host if this is a rejoin mid-match
 	joined.emit(seat)
 
 @rpc("authority", "call_remote", "reliable")
@@ -474,9 +454,11 @@ func _rpc_roster(list: Array, room_settings: Dictionary) -> void:
 func start_match() -> void:
 	if not is_host() or roster.size() < GameConfig.MIN_PLAYERS:
 		return
-	var players: Array = roster.map(func(entry): return {"name": entry["name"], "color_name": entry["color_name"]})
+	var players: Array = roster.map(func(entry): return {"name": entry["name"], "color_name": entry["color_name"],
+		"figure": entry.get("figure", "")})
 	var config := {"players": players, "cards": bool(settings.get("cards", true)),
-		"throw_skill": String(settings.get("throw_skill", GameConfig.DEFAULT_THROW_SKILL))}
+		"throw_skill": String(settings.get("throw_skill", GameConfig.DEFAULT_THROW_SKILL)),
+		"draft": String(settings.get("draft", GameConfig.DEFAULT_DRAFT))}
 	_rpc_start.rpc(config)
 	_begin_match(config)
 
@@ -488,7 +470,8 @@ func _rpc_start(config: Dictionary) -> void:
 func _begin_match(config: Dictionary, resume: Dictionary = {}) -> void:
 	match_config = config
 	in_match = true
-	var setup := MatchSetup.make(config["players"], bool(config["cards"]), str(config.get("throw_skill", "off")))
+	var setup := MatchSetup.make(config["players"], bool(config["cards"]), str(config.get("throw_skill", "off")),
+		str(config.get("draft", GameConfig.DEFAULT_DRAFT)))
 	setup.resume = resume
 	if scene_loader.is_valid():
 		scene_loader.call(setup)

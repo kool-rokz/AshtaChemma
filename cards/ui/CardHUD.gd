@@ -1,37 +1,38 @@
 class_name CardHUD
 extends CanvasLayer
 
-## Card UI, created by CardManager: the hand strip under the board, the private
-## draft screens with "pass to" covers, card lines in the main HUD log, and on the
-## board the target choices and the rings/tints of lasting effects.
-## Hands stay face-down until their owner clicks "Show cards", and hide again every turn.
+## Card UI, created by CardManager, in the Ganjifa look:
+##   - this screen's hand as round cards fanned at the bottom (GanjifaHand): hover to read,
+##     click to play. A card that needs targets starts its pick (the board rings them);
+##     one that needs none is chosen first and played with a second click.
+##     Offline (one screen passed round) a hand stays face down until its owner shows it,
+##     and hides again every turn.
+##   - every card played, by anyone: it flies to the middle with its rule, then onto the
+##     discard pile beside the board (CardEffects3D shows what it did on the board)
+##   - the private draft (GanjifaDraft) with "pass to" covers offline, or the open draft
+##     (GanjifaOpenDraft: one face-up pool, picks in turn, seen by everyone)
+##   - card lines in the HUD log, cards held and lasting effects on the player badges, and
+##     the board's target choices and markers (through Pawn / TileHighlighter state)
+## Decides nothing about the rules: plays go through MatchController as intents.
 
-const HAND_POS := Vector2(390, 540)
-const HAND_SIZE := Vector2(500, 172)
-const HAND_CARD_SIZE := Vector2(92, 124)
-const DRAFT_CARD_SIZE := Vector2(150, 172)
-const BACK_COLOR := Color(0.22, 0.22, 0.3)
-const TEXT_COLOR := Color(0.95, 0.95, 0.97)
-const MUTED_COLOR := Color(0.7, 0.7, 0.75)
+const TEXT_COLOR := HudStyle.TEXT
+const MUTED_COLOR := HudStyle.MUTED
 
-signal _draft_done(picks: Array)
 signal _cover_closed
 
 var _cm: CardManager
 var _game: GameManager
 var _hud: HUD
-
-var _hand_panel: PanelContainer
-var _hand_style: StyleBoxFlat
-var _hand_title: Label
+var _hand: GanjifaHand
+var _caption: Label
 var _toggle_button: Button
 var _cancel_button: Button
-var _cards_row: HBoxContainer
 var _revealed: bool = false
 var _refresh_queued: bool = false
-
-var _overlay: ColorRect
-var _overlay_box: VBoxContainer
+## A card that needs no target, chosen with one click and waiting for the second.
+var _armed: int = -1
+var _overlay: Control
+var _open_draft: GanjifaOpenDraft
 
 func _init() -> void:
 	layer = 5
@@ -40,8 +41,17 @@ func bind(manager: CardManager) -> void:
 	_cm = manager
 	_game = manager.game
 	_hud = manager.hud
-	_build_hand_panel()
-	_build_overlay()
+	_hand = GanjifaHand.new()
+	_hand.name = "Hand"
+	add_child(_hand)
+	_hand.card_clicked.connect(_on_card_clicked)
+	_hand.cancel_requested.connect(_cancel)
+	_build_caption()
+	_overlay = Control.new()
+	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay.z_index = 100 # covers and the draft hide the hand (its cards draw raised)
+	add_child(_overlay)
 
 	_cm.hand_changed.connect(func(_p): _refresh())
 	_cm.play_window_changed.connect(_on_play_window_changed)
@@ -54,49 +64,38 @@ func bind(manager: CardManager) -> void:
 	_cm.card_rejected.connect(_on_card_rejected)
 	_cm.modifier_added.connect(func(_m): _refresh_player_notes())
 	_cm.modifier_expired.connect(_on_modifier_expired)
+	_cm.open_draft_changed.connect(_on_open_draft_changed)
 	_game.turn_changed.connect(_on_turn_changed)
-	_game.game_over.connect(func(_w): _hand_panel.visible = false)
+	_game.game_over.connect(_on_game_over)
 	_refresh()
 
-# --- HAND STRIP ---
-func _build_hand_panel() -> void:
-	_hand_panel = PanelContainer.new()
-	_hand_panel.position = HAND_POS
-	_hand_panel.size = HAND_SIZE
-	_hand_style = StyleBoxFlat.new()
-	_hand_style.bg_color = Color(0.13, 0.13, 0.16, 0.92)
-	_hand_style.set_corner_radius_all(8)
-	_hand_style.set_content_margin_all(8)
-	_hand_style.set_border_width_all(2)
-	_hand_style.border_color = Color(0, 0, 0, 0)
-	_hand_panel.add_theme_stylebox_override("panel", _hand_style)
-	add_child(_hand_panel)
-
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
-	_hand_panel.add_child(box)
-
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	_hand_title = _label("", 14, MUTED_COLOR)
-	_hand_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hand_title.clip_text = true
-	header.add_child(_hand_title)
-	_cancel_button = _small_button("Cancel")
-	# Actions go through MatchController as intents (set after this panel is built)
-	_cancel_button.pressed.connect(func(): _cm.controller.cancel_card())
-	header.add_child(_cancel_button)
-	_toggle_button = _small_button("Show cards")
+# --- THE HAND ---
+## A line above the hand saying what the cards can do now, with Show / Cancel buttons.
+func _build_caption() -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	add_child(row)
+	_caption = HudStyle.label("", 15, MUTED_COLOR)
+	_caption.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_caption.add_theme_constant_override("outline_size", 6)
+	row.add_child(_caption)
+	_cancel_button = HudStyle.button("Cancel", Vector2(80, 30))
+	_cancel_button.pressed.connect(_cancel)
+	row.add_child(_cancel_button)
+	_toggle_button = HudStyle.button("Show cards", Vector2(120, 30))
 	_toggle_button.name = "ShowCards"
 	_toggle_button.pressed.connect(func():
 		_revealed = not _revealed
 		_refresh())
-	header.add_child(_toggle_button)
-	box.add_child(header)
+	row.add_child(_toggle_button)
+	row.resized.connect(func(): _place_caption(row))
+	_hand.get_viewport().size_changed.connect(func(): _place_caption(row))
 
-	_cards_row = HBoxContainer.new()
-	_cards_row.add_theme_constant_override("separation", 6)
-	box.add_child(_cards_row)
+func _place_caption(row: Control) -> void:
+	var screen := _hand.get_viewport_rect().size
+	# Above the hand, clear of a raised (chosen) card
+	row.position = Vector2(_hand.centre_x() - row.size.x / 2.0, screen.y - GanjifaCard.DIAMETER * GanjifaHand.PEEK - row.size.y - 46.0)
 
 ## Refreshes once at the end of the frame, after GameManager's state has settled
 ## (turn_changed fires before the turn reaches WAITING_FOR_ROLL).
@@ -106,201 +105,197 @@ func _refresh() -> void:
 	_refresh_queued = true
 	_apply_refresh.call_deferred()
 
+func _viewer() -> int:
+	var online := _cm.controller != null and _cm.controller.local_seat >= 0
+	return _cm.controller.local_seat if online else _game.current_player_index
+
+func _online() -> bool:
+	return _cm.controller != null and _cm.controller.local_seat >= 0
+
 func _apply_refresh() -> void:
 	_refresh_queued = false
 	if _cm == null or _game.players.is_empty():
 		return
 	# Offline: the current player's hand. Online: always this screen's own hand.
-	var online := _cm.controller != null and _cm.controller.local_seat >= 0
-	var player := _cm.controller.local_seat if online else _game.current_player_index
+	var player := _viewer()
 	var my_turn := player == _game.current_player_index
-	var hand: Array = _cm.hands[player] if player < _cm.hands.size() else []
+	var cards: Array = _cm.hands[player] if player < _cm.hands.size() else []
 	var targeting := _cm.is_targeting() and my_turn
-	if online:
+	if _online():
 		_revealed = true # nobody else looks at this screen
-
+	if _armed >= cards.size() or not my_turn:
+		_armed = -1
 	# Card time = this player may still play a card (before their first throw).
 	var card_time := _cm.can_play_now(player) and not _cm.get_playable_cards(player).is_empty()
+	var face_up := _revealed or targeting
+	var blocked: Array[String] = []
+	for i in cards.size():
+		blocked.append(_cm.get_block_reason(player, i) if my_turn else "Playable on your turn, before you throw")
+	var chosen := _cm.get_targeting_hand_index() if targeting else _armed
+	_hand.set_cards(cards, face_up, blocked, chosen)
 
-	_cancel_button.visible = targeting
-	_toggle_button.visible = not targeting and not hand.is_empty() and not online
-	_toggle_button.text = "Hide cards" if _revealed else "Show cards (%d)" % hand.size()
-	var title_color := MUTED_COLOR
+	_cancel_button.visible = targeting or _armed >= 0
+	_toggle_button.visible = not targeting and not cards.is_empty() and not _online()
+	_toggle_button.text = "Hide cards" if _revealed else "Show cards (%d)" % cards.size()
+	var color := MUTED_COLOR
 	if targeting:
-		_hand_title.text = _cm.get_current_target_spec().get_prompt() + " (right-click to cancel)"
-		title_color = TEXT_COLOR
-	elif hand.is_empty():
-		_hand_title.text = "No cards left" if online else "%s has no cards left" % _game.get_player_name(player)
+		_caption.text = _cm.get_current_target_spec().get_prompt() + GameInput.pick(" (right-click to cancel)", "", " (B / Esc to cancel)")
+		color = TEXT_COLOR
+	elif _armed >= 0:
+		_caption.text = GameInput.pick("Click %s again to play it", "Tap %s again to play it", "Press A / Enter again to play %s") % (cards[_armed] as CardData).title
+		color = TEXT_COLOR
+	elif cards.is_empty():
+		_caption.text = "No cards left" if _online() else "%s has no cards left" % _game.get_player_name(player)
 	elif not my_turn:
-		_hand_title.text = "Your cards: playable on your turn, before you throw"
+		_caption.text = "Your cards: playable on your turn, before you throw"
+	elif not face_up:
+		_caption.text = "%s's cards are hidden" % _game.get_player_name(player)
 	elif card_time:
-		_hand_title.text = "Card time: play one BEFORE you throw"
-		title_color = _game.get_player_color(player)
+		_caption.text = "Card time: play one before you throw"
+		color = _game.get_player_color(player).lightened(0.2)
 	elif _cm.get_played_this_turn() > 0:
-		_hand_title.text = "Card played. Next one on your next turn"
+		_caption.text = "Card played. The next one on your next turn"
 	elif not _cm.is_play_window_open() and not _game.is_game_finished():
-		_hand_title.text = "You threw: cards locked until your next turn"
+		_caption.text = "You threw: cards are locked until your next turn"
 	else:
-		_hand_title.text = "No card can be played right now"
-	_hand_title.add_theme_color_override("font_color", title_color)
-
-	# Coloured frame while cards can be played; none once the window has closed
-	_hand_style.border_color = _game.get_player_color(player) if card_time or targeting else Color(0, 0, 0, 0)
-	_update_throw_button(card_time)
-
-	for child in _cards_row.get_children():
-		child.queue_free()
-	for i in hand.size():
-		var card: CardData = hand[i]
-		var widget: Button
-		if _revealed or targeting:
-			widget = _card_widget(card, HAND_CARD_SIZE, true, 13, 11)
-			var reason := _cm.get_block_reason(player, i)
-			widget.disabled = reason != ""
-			widget.tooltip_text = card.description + ("" if reason == "" else "\n\n" + reason)
-			widget.pressed.connect(func(): _cm.controller.play_card(card.id))
-		else:
-			widget = _card_widget(null, HAND_CARD_SIZE, false, 13, 11)
-			widget.tooltip_text = "Click to show your cards"
-			widget.pressed.connect(func():
-				_revealed = true
-				_refresh())
-		widget.name = "Card%d" % (i + 1)
-		_cards_row.add_child(widget)
+		_caption.text = "No card can be played right now"
+	_caption.add_theme_color_override("font_color", color)
 	_refresh_player_notes()
 
-const THROW_ENDS_CARDS := "Throw shells (ends card play)"
+func _on_card_clicked(index: int) -> void:
+	var player := _viewer()
+	if _cm.is_targeting() or player != _game.current_player_index:
+		return
+	if not _revealed:
+		_revealed = true # a click on a hidden hand shows it
+		_refresh()
+		return
+	var cards: Array = _cm.hands[player]
+	if index < 0 or index >= cards.size():
+		return
+	var card: CardData = cards[index]
+	var reason := _cm.get_block_reason(player, index)
+	if reason != "":
+		_hud.set_hint("Can't play %s: %s" % [card.title, reason])
+		return
+	var needs_pick := card.targets.any(func(t: CardTarget): return t.kind != CardTarget.Kind.NEXT_OPPONENT)
+	if needs_pick or _armed == index:
+		_armed = -1
+		_cm.controller.play_card(card.id)
+	else:
+		_armed = index # no target to pick: a second click plays it
+		_hud.set_hint("%s: %s %s" % [card.title, card.description, GameInput.pick("Click it again to play it.", "Tap it again to play it.", "Press A / Enter again to play it.")])
+	_refresh()
 
-## While a card could still be played, the Throw button says that throwing gives that up.
-func _update_throw_button(card_time: bool) -> void:
-	var button := _hud.roll_button
-	if card_time:
-		button.text = THROW_ENDS_CARDS
-	elif button.text == THROW_ENDS_CARDS:
-		button.text = "Throw shells"
+func _cancel() -> void:
+	if _armed >= 0:
+		_armed = -1
+		_refresh()
+	elif _cm.is_targeting():
+		_cm.controller.cancel_card()
 
 func _refresh_player_notes() -> void:
 	for p in _game.players.size():
-		var parts: Array[String] = ["Cards: %d" % _cm.hands[p].size()]
+		_hud.set_player_cards(p, _cm.hands[p].size())
+		var parts: Array[String] = []
 		for active in _cm.get_modifiers_for_player(p):
 			if active.data.label != "":
 				parts.append(active.data.label)
 		_hud.set_player_note(p, " · ".join(parts))
 
-# --- DRAFT ---
-func _build_overlay() -> void:
-	_overlay = ColorRect.new()
-	_overlay.color = Color(0.08, 0.08, 0.1, 0.97)
-	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	_overlay.visible = false
-	add_child(_overlay)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_overlay.add_child(center)
-	_overlay_box = VBoxContainer.new()
-	_overlay_box.add_theme_constant_override("separation", 16)
-	center.add_child(_overlay_box)
-
-func _clear_overlay() -> void:
-	for child in _overlay_box.get_children():
-		child.queue_free()
-
+# --- DRAFT AND COVERS ---
 ## Full-screen "pass the device" cover so others don't see the next player's cards.
 func show_pass_cover(player: int, button_text: String = "") -> void:
-	_clear_overlay()
-	_overlay.visible = true
+	var cover := ColorRect.new()
+	cover.color = Color(0.06, 0.04, 0.03, 0.97)
+	cover.size = _hand.get_viewport_rect().size
+	_overlay.add_child(cover)
+	var center := CenterContainer.new()
+	center.size = cover.size
+	cover.add_child(center)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	center.add_child(box)
 	var player_name := _game.get_player_name(player)
-	var title := _label("Pass to %s" % player_name, 40, _game.get_player_color(player))
+	var title := HudStyle.label("Pass to %s" % player_name, 44, _game.get_player_color(player).lightened(0.15), true)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_overlay_box.add_child(title)
-	var note := _label("Everyone else, look away: cards are secret.", 18, MUTED_COLOR)
+	box.add_child(title)
+	var note := HudStyle.label("Everyone else, look away: cards are secret.", 18, MUTED_COLOR)
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_overlay_box.add_child(note)
-	var ready_button := _big_button(button_text if button_text != "" else "I'm %s, show my cards" % player_name)
+	box.add_child(note)
+	var ready_button := HudStyle.button(button_text if button_text != "" else "I'm %s, show my cards" % player_name, Vector2(320, 52))
 	ready_button.name = "PassReady"
+	ready_button.add_theme_font_size_override("font_size", 20)
+	ready_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	ready_button.pressed.connect(func(): _cover_closed.emit())
-	_overlay_box.add_child(ready_button)
+	ready_button.focus_mode = Control.FOCUS_ALL # pad players press it with A
+	box.add_child(ready_button)
+	GameInput.offer_focus(get_tree(), ready_button)
 	await _cover_closed
-	_overlay.visible = false
+	cover.queue_free()
 
 ## Private draft for one player: a cover first, then pick `keep` of `offer`.
 func run_draft(player: int, offer: Array, keep: int, with_cover: bool = true) -> Array:
 	if with_cover:
 		await show_pass_cover(player)
-	_clear_overlay()
-	_overlay.visible = true
+	var draft := GanjifaDraft.new()
+	_overlay.add_child(draft)
+	return await draft.run(offer, keep, "%s, pick %d cards" % [_game.get_player_name(player), keep],
+		"They stay in your hand all game. Each can be played once, before you throw (1 per turn).",
+		_game.get_player_color(player).lightened(0.15))
 
-	var title := _label("%s, pick %d cards" % [_game.get_player_name(player), keep], 30, _game.get_player_color(player))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_overlay_box.add_child(title)
-	var note := _label("They stay in your hand all game. Each can be played once, before you throw (1 per turn).", 15, MUTED_COLOR)
-	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_overlay_box.add_child(note)
-
-	var grid := GridContainer.new()
-	grid.columns = 5
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
-	_overlay_box.add_child(grid)
-
-	var confirm := _big_button("")
-	confirm.name = "ConfirmDraft"
-	var picked: Array[Button] = []
-	var buttons: Array[Button] = []
-	var update := func():
-		confirm.text = "Keep these %d" % keep if picked.size() == keep else "Picked %d / %d" % [picked.size(), keep]
-		confirm.disabled = picked.size() != keep
-
-	for i in offer.size():
-		var widget := _card_widget(offer[i], DRAFT_CARD_SIZE, true, 16, 13)
-		widget.name = "Offer%d" % (i + 1)
-		widget.toggle_mode = true
-		widget.tooltip_text = offer[i].description
-		widget.toggled.connect(func(on: bool):
-			if on and picked.size() >= keep:
-				widget.set_pressed_no_signal(false)
-				return
-			if on:
-				picked.append(widget)
-			else:
-				picked.erase(widget)
-			update.call())
-		buttons.append(widget)
-		grid.add_child(widget)
-
-	confirm.pressed.connect(func():
-		var picks: Array = []
-		for i in buttons.size():
-			if buttons[i] in picked:
-				picks.append(offer[i])
-		_draft_done.emit(picks))
-	_overlay_box.add_child(confirm)
-	update.call()
-
-	var result: Array = await _draft_done
-	_overlay.visible = false
-	return result
+## The open draft: shown on every screen from CardManager's state; picks go to the
+## controller, which checks them (offline: for whoever's pick it is).
+func _on_open_draft_changed() -> void:
+	if not _cm.is_open_draft_started():
+		return
+	if _open_draft == null:
+		_open_draft = GanjifaOpenDraft.new()
+		_open_draft.name = "OpenDraft"
+		_overlay.add_child(_open_draft)
+		_open_draft.card_chosen.connect(func(slot: int):
+			if _cm.controller:
+				_cm.controller.take_open_card(slot))
+	var names: Array = []
+	var colors: Array = []
+	for p in _game.players.size():
+		names.append(_game.get_player_name(p))
+		colors.append(_game.get_player_color(p).lightened(0.15))
+	var picker := _cm.open_draft_picker()
+	var you: int = _cm.controller.local_seat if _online() else -1
+	var can_pick := picker >= 0 and (you < 0 or picker == you)
+	_open_draft.show_state(_cm.open_pool, _cm.open_taken, picker, names, colors, can_pick, you)
+	if _cm.is_open_draft_done():
+		var done := _open_draft
+		_open_draft = null
+		done.finish()
 
 # --- EVENTS ---
+func _on_game_over(_winner: int) -> void:
+	_hand.visible = false
+	_caption.get_parent().visible = false
+
 func _on_turn_changed(_player: int) -> void:
 	_revealed = false
+	_armed = -1
 	_refresh()
 
 func _on_play_window_changed(open: bool) -> void:
 	var my_turn := _cm.controller == null or _cm.controller.is_local_turn()
 	if open and my_turn and not _cm.hands[_game.current_player_index].is_empty():
-		var show_hint := "" if _cm.controller and _cm.controller.local_seat >= 0 else " (Show cards)"
+		var show_hint := GameInput.pick("" if _online() else " (Show cards)", "" if _online() else " (Show cards)", " (C / Y for your cards)")
 		_hud.set_hint("Card time: play a card first if you like%s. Throwing the shells ends card play for this turn." % show_hint)
 	_refresh()
 
 func _on_targeting_started(player: int, card: CardData, spec: CardTarget, candidates: Array) -> void:
+	_hand.release_pad_focus() # targets are picked on the board (PadCursor)
 	_show_target_highlights(spec, candidates)
 	if _cm.controller and not _cm.controller.is_local_turn():
 		_hud.set_hint("%s is playing a card..." % _game.get_player_name(player)) # revealed once played
 	else:
-		_hud.set_hint("%s: %s (%d option%s). Right-click or Esc to cancel." % [
-			card.title, spec.get_prompt(), candidates.size(), "" if candidates.size() == 1 else "s"])
+		_hud.set_hint("%s: %s (%d option%s). %s" % [
+			card.title, spec.get_prompt(), candidates.size(), "" if candidates.size() == 1 else "s",
+			GameInput.pick("Right-click or Esc to cancel.", "Tap Cancel to stop.", "Left / Right to choose, A / Enter to pick, B / Esc to cancel.")])
 	_refresh()
 
 func _on_targeting_cancelled(_player: int, _card: CardData) -> void:
@@ -308,6 +303,8 @@ func _on_targeting_cancelled(_player: int, _card: CardData) -> void:
 		_hud.set_hint("Card cancelled. Play a card or throw the shells.")
 	_refresh()
 
+## Everyone sees a played card: it flies in (from the hand that played it, or that
+## player's badge), shows its rule, and lands on the discard pile.
 func _on_card_played(player: int, card: CardData, targets: Array) -> void:
 	var parts: Array[String] = []
 	for i in targets.size():
@@ -319,13 +316,16 @@ func _on_card_played(player: int, card: CardData, targets: Array) -> void:
 		else:
 			parts.append(_hud.who(target))
 	var on := "" if parts.is_empty() else " on " + " and ".join(parts)
-	_hud.log_message("[color=#e8c26a]%s played [b]%s[/b]%s.[/color]" % [_hud.who(player), card.title, on])
-	_hud.log_message("[color=#a8a8b0]   %s[/color]" % card.description)
+	_hud.log_message("[color=#b8862a]%s played [b]%s[/b] (%s)%s.[/color]" % [_hud.who(player), card.title, Ganjifa.look(card)["avatar"], on], true)
+	_hud.log_message("   %s" % card.description)
+	var from := _hand.screen_centre_of(card.id) if player == _viewer() else _hud.badge_centre(player)
+	var pile: Vector2 = _cm.board_view.discard_screen_point() if _cm.board_view else _hand.get_viewport_rect().size / 2.0
+	_hand.show_played(card, from, pile)
 	_refresh()
 
 func _on_card_resolved(_player: int, _card: CardData) -> void:
 	if not _game.is_game_finished():
-		_hud.set_hint(HUD.THROW_HINT)
+		_hud.set_hint(HUD.throw_hint())
 	_refresh()
 
 func _on_card_rejected(_player: int, card: CardData, reason: String) -> void:
@@ -336,7 +336,7 @@ func _on_modifier_expired(active: ActiveModifier) -> void:
 	_hud.log_message("%s's [b]%s[/b] wore off (%s)." % [_hud.who(active.owner), active.card.title, what])
 	_refresh_player_notes()
 
-# --- BOARD MARKS ---
+# --- BOARD MARKS (drawn by the board view from this state) ---
 func _show_target_highlights(spec: CardTarget, candidates: Array) -> void:
 	if _cm.controller and not _cm.controller.is_local_turn():
 		return # only the player picking sees the choices
@@ -353,7 +353,7 @@ func _clear_target_highlights() -> void:
 		pawn.set_highlighted(false)
 	_game.board.highlighter.set_target_tiles([])
 
-## Rings on affected pawns, tints on affected squares.
+## Domes on affected pawns, marks on affected squares.
 func _draw_modifier_markers() -> void:
 	var pawn_colors := {}
 	var tiles := {}
@@ -368,78 +368,3 @@ func _draw_modifier_markers() -> void:
 	for pawn in _game.get_all_pawns():
 		pawn.set_status_color(pawn_colors.get(pawn, Color(0, 0, 0, 0)))
 	_game.board.highlighter.set_marked_tiles(tiles)
-
-# --- WIDGETS ---
-func _label(text: String, font_size: int, color: Color = TEXT_COLOR) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", font_size)
-	label.add_theme_color_override("font_color", color)
-	return label
-
-func _small_button(text: String) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_size_override("font_size", 13)
-	return button
-
-func _big_button(text: String) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.custom_minimum_size = Vector2(320, 52)
-	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	button.add_theme_font_size_override("font_size", 20)
-	return button
-
-## A card face (title + description) or, with card = null, a face-down back.
-func _card_widget(card: CardData, card_size: Vector2, face_up: bool, title_size: int, body_size: int) -> Button:
-	var button := Button.new()
-	button.custom_minimum_size = card_size
-	button.focus_mode = Control.FOCUS_NONE
-	button.clip_contents = true
-	var base: Color = card.color if face_up and card else BACK_COLOR
-	var looks := {
-		"normal": [base.darkened(0.35), base, 2],
-		"hover": [base.darkened(0.2), Color(1, 1, 1, 0.45), 2],
-		"pressed": [base.darkened(0.05), Color.WHITE, 4],
-		"hover_pressed": [base.darkened(0.05), Color.WHITE, 4],
-		"disabled": [base.darkened(0.7), base.darkened(0.5), 2],
-	}
-	for state in looks:
-		var style := StyleBoxFlat.new()
-		style.bg_color = looks[state][0]
-		style.border_color = looks[state][1]
-		style.set_border_width_all(looks[state][2])
-		style.set_corner_radius_all(6)
-		button.add_theme_stylebox_override(state, style)
-
-	var box := VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_FULL_RECT)
-	box.offset_left = 7
-	box.offset_top = 6
-	box.offset_right = -7
-	box.offset_bottom = -6
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_theme_constant_override("separation", 4)
-	button.add_child(box)
-
-	if not face_up or card == null:
-		var mark := _label("?", 40, Color(1, 1, 1, 0.35))
-		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		mark.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		box.add_child(mark)
-		return button
-
-	var title := _label(card.title, title_size)
-	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(title)
-	var body := _label(card.description, body_size, Color(0.88, 0.88, 0.9))
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(body)
-	return button

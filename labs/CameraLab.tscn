@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bn35oohq7s5xf"]
+
+[ext_resource type="Script" uid="uid://b2cbjjbwh8ry6" path="res://labs/CameraLab.gd" id="1_p6jwk"]
+
+[node name="CameraLab" type="Node3D" unique_id=94207912]
+script = ExtResource("1_p6jwk")

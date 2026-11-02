@@ -54,6 +54,8 @@ var _my_offer: Array = []
 var _last_pick_msec: int = -1000
 
 const PICK_ECHO_MSEC := 150
+## Pre-game card intents (not tied to whose turn it is).
+const DRAFT_KINDS := [PlayerIntent.Kind.DRAFT_PICKS, PlayerIntent.Kind.DRAFT_POOL, PlayerIntent.Kind.DRAFT_TAKE]
 ## Game seconds an event may wait for this copy to be ready (animations, turn pause).
 const READY_TIMEOUT := 30.0
 ## Host: game seconds a dropped player has to come back before the host plays their
@@ -87,7 +89,6 @@ func _ready() -> void:
 		card_manager.controller = self
 		if resume.is_empty():
 			game.pre_game_tasks.append(run_draft)
-	hud.roll_button.pressed.connect(throw_shells)
 	if shell_stage:
 		shell_stage.throw_released.connect(throw_shells)
 		shell_stage.shake_changed.connect(send_shake)
@@ -115,7 +116,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not _cards() or not card_manager.is_targeting():
 		return
 	var right_click: bool = event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT
-	if right_click or event.is_action_pressed("ui_cancel"):
+	if right_click or event.is_action_pressed("pick_cancel"):
 		cancel_card()
 		get_viewport().set_input_as_handled()
 
@@ -218,7 +219,7 @@ func submit_remote(intent: PlayerIntent, seat: int) -> bool:
 	return _authorize(intent, true)
 
 func _authorize(intent: PlayerIntent, remote: bool) -> bool:
-	var reason := _validate(intent)
+	var reason := "Only the host deals the cards." if remote and intent.kind == PlayerIntent.Kind.DRAFT_POOL else _validate(intent)
 	if reason != "":
 		_reject(intent, reason)
 		if remote:
@@ -260,6 +261,12 @@ func _validate(intent: PlayerIntent) -> String:
 		return "Busy."
 	if intent.kind == PlayerIntent.Kind.DRAFT_PICKS:
 		return _validate_draft(intent)
+	if intent.kind == PlayerIntent.Kind.DRAFT_POOL:
+		if not _open_draft() or card_manager.is_open_draft_started():
+			return "No open draft to deal."
+		return ""
+	if intent.kind == PlayerIntent.Kind.DRAFT_TAKE:
+		return card_manager.get_open_take_block(intent.player, intent.index) if _open_draft() else "This game has no open draft."
 	if intent.player != game.current_player_index:
 		return "Not your turn."
 	var state := game.current_state
@@ -300,6 +307,10 @@ func _validate(intent: PlayerIntent) -> String:
 				return "No card to cancel."
 	return ""
 
+## Cards are on and drafted openly (GameConfig.DRAFT_OPEN)?
+func _open_draft() -> bool:
+	return _cards() and game.setup.draft_mode == GameConfig.DRAFT_OPEN
+
 func _validate_draft(intent: PlayerIntent) -> String:
 	if not _cards() or not _offers.has(intent.player):
 		return "No draft offer for this player."
@@ -328,7 +339,11 @@ func _reject(intent: PlayerIntent, reason: String) -> void:
 ## Pre-game (awaited by GameManager): each player keeps cards from a private offer.
 ## Offline: one screen with pass-the-device covers. Online: everyone picks at once on
 ## their own screen; the host deals the offers and checks the picks.
+## Open draft: see _run_open_draft.
 func run_draft() -> void:
+	if _open_draft():
+		await _run_open_draft()
+		return
 	match mode:
 		Mode.OFFLINE:
 			for player in game.players.size():
@@ -351,6 +366,33 @@ func run_draft() -> void:
 		hud.set_hint("Waiting for the other players to pick their cards...")
 	while _drafted.size() < game.players.size():
 		await get_tree().process_frame
+
+## Open draft: the authority deals one face-up pool, then players take a card each in
+## snake order (every pick is an intent the authority checks, public to all). The card
+## UI shows it all from CardManager's state; picks come back through take_open_card().
+## Bots and auto-draft take the first card left; the host stands in for absent players.
+func _run_open_draft() -> void:
+	if mode in [Mode.OFFLINE, Mode.HOST]:
+		var pool := card_manager.make_open_pool(game.players.size())
+		submit(PlayerIntent.draft_pool(pool.map(func(c): return String(c.id))))
+	var auto_taken := -1
+	while not card_manager.is_open_draft_done():
+		var picker := card_manager.open_draft_picker()
+		var mine := picker >= 0 and (mode == Mode.OFFLINE or picker == local_seat)
+		if mine and (card_manager.auto_draft or DevFlags.auto_draft) and auto_taken != card_manager.open_picks_made:
+			auto_taken = card_manager.open_picks_made
+			submit(PlayerIntent.draft_take(picker, card_manager.first_open_slot()))
+		await get_tree().process_frame
+
+## The card UI: this screen takes the card in `slot` of the open draft (offline: for
+## whoever's pick it is; online: only on this seat's own pick).
+func take_open_card(slot: int) -> bool:
+	if not _open_draft():
+		return false
+	var picker := card_manager.open_draft_picker()
+	if mode != Mode.OFFLINE and picker != local_seat:
+		return false
+	return submit(PlayerIntent.draft_take(picker, slot))
 
 ## Card ids kept from `offer`: the draft screen, or the first ones (auto draft).
 func _pick(player: int, offer: Array, with_cover: bool) -> Array:
@@ -383,6 +425,12 @@ func _process(delta: float) -> void:
 
 ## The next action to play for an absent seat, or null if none is due.
 func _stand_in_intent() -> PlayerIntent:
+	# Open draft: an absent player's pick is the first card left
+	if _open_draft() and card_manager.is_open_draft_started() and not card_manager.is_open_draft_done():
+		var picker := card_manager.open_draft_picker()
+		if _away_time.get(picker, 0.0) >= ABSENT_DRAFT_GRACE:
+			return PlayerIntent.draft_take(picker, card_manager.first_open_slot())
+		return null
 	# Draft: keep the first offered cards
 	for seat in _away_time:
 		if _offers.has(seat) and not _drafted.has(seat) and _away_time[seat] >= ABSENT_DRAFT_GRACE:
@@ -454,7 +502,7 @@ func _wait_until_ready(intent: PlayerIntent) -> void:
 		await get_tree().process_frame
 
 func _execute(intent: PlayerIntent, event: Dictionary) -> void:
-	if intent.kind != PlayerIntent.Kind.DRAFT_PICKS and intent.player != game.current_player_index:
+	if not intent.kind in DRAFT_KINDS and intent.player != game.current_player_index:
 		push_error("MatchController: out of sync, %s on player %d's turn" % [intent, game.current_player_index])
 	match intent.kind:
 		PlayerIntent.Kind.THROW:
@@ -478,6 +526,10 @@ func _execute(intent: PlayerIntent, event: Dictionary) -> void:
 		PlayerIntent.Kind.DRAFT_PICKS:
 			card_manager.set_hand_by_ids(intent.player, intent.card_ids)
 			_drafted[intent.player] = true
+		PlayerIntent.Kind.DRAFT_POOL:
+			card_manager.start_open_draft(intent.card_ids)
+		PlayerIntent.Kind.DRAFT_TAKE:
+			card_manager.take_from_pool(intent.player, intent.index)
 
 # --- SNAPSHOT ---
 ## Is now a moment a snapshot is complete (nothing animating or waiting to apply)?

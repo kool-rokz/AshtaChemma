@@ -39,8 +39,8 @@ func _check(condition: bool, message: String) -> void:
 		print("  FAIL: ", message)
 
 # --- harness ---
-func _roll_button() -> Button:
-	return (gm.get_parent().get_node("HUD") as HUD).roll_button
+func _can_throw() -> bool:
+	return (gm.get_parent().get_node("HUD") as HUD).throw_allowed
 
 func _new_game(throws: Array[int], hand_ids: Array = [], cards_on := true) -> void:
 	if gm:
@@ -222,9 +222,9 @@ func _scenario_cancel_keeps_card() -> void:
 	print("scenario: cancelling a target pick keeps the card and the turn")
 	await _new_game([], [&"sprint"])
 	_check(cm.request_play(0) and cm.is_targeting(), "targeting started")
-	_check(gm.current_state == GameManager.GameState.PLAYING_CARD and _roll_button().disabled, "throw locked while picking")
+	_check(gm.current_state == GameManager.GameState.PLAYING_CARD and not _can_throw(), "throw locked while picking")
 	cm.cancel_targeting()
-	_check(gm.current_state == GameManager.GameState.WAITING_FOR_ROLL and not _roll_button().disabled, "back to waiting")
+	_check(gm.current_state == GameManager.GameState.WAITING_FOR_ROLL and _can_throw(), "back to waiting")
 	_check(cm.hands[0].size() == 1 and cm.can_play_now(), "card still in hand and playable")
 
 func _scenario_card_move_wins() -> void:

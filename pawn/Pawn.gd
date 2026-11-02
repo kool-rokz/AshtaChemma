@@ -96,6 +96,17 @@ func move_along_path(path_coordinates: Array[Vector2]) -> void:
 	# Block the caller until the whole sequence is done
 	await tween.finished
 
+## Pointer reports from another view of the board (the 3D board picks pawns itself
+## and turns off this Area2D's own picking with input_pickable = false).
+func point(on: bool) -> void:
+	if on:
+		hovered.emit(self)
+	else:
+		unhovered.emit(self)
+
+func press() -> void:
+	clicked.emit(self)
+
 # Clicks are only reported; MatchController decides what they mean (move or card target)
 func _on_input_event(_viewport, event, _shape_idx) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:

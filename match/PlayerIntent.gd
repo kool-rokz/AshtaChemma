@@ -15,6 +15,8 @@ enum Kind {
 	CHOOSE_TARGET,  ## target = {"pawn": [p, i]} | {"tile": t} | {"player": p}
 	CANCEL_CARD,
 	DRAFT_PICKS,    ## card_ids kept from the player's draft offer
+	DRAFT_POOL,     ## open draft: the authority deals the face-up pool (card_ids); player -1
+	DRAFT_TAKE,     ## open draft: index = the pool slot taken
 }
 
 var kind: Kind
@@ -64,6 +66,16 @@ static func cancel_card(by_player: int) -> PlayerIntent:
 static func draft_picks(by_player: int, ids: Array) -> PlayerIntent:
 	var intent := make(Kind.DRAFT_PICKS, by_player)
 	intent.card_ids = ids
+	return intent
+
+static func draft_pool(ids: Array) -> PlayerIntent:
+	var intent := make(Kind.DRAFT_POOL, -1)
+	intent.card_ids = ids
+	return intent
+
+static func draft_take(by_player: int, slot: int) -> PlayerIntent:
+	var intent := make(Kind.DRAFT_TAKE, by_player)
+	intent.index = slot
 	return intent
 
 func to_dict() -> Dictionary:

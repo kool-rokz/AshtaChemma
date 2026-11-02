@@ -3,10 +3,12 @@
 [ext_resource type="PackedScene" uid="uid://cd3kwiikt180v" path="res://board/Board.tscn" id="3_8qpgq"]
 [ext_resource type="PackedScene" uid="uid://cjboufy2oqxwa" path="res://game_manager/GameManager.tscn" id="3_bqqt8"]
 [ext_resource type="PackedScene" path="res://ui/HUD.tscn" id="4_hud"]
-[ext_resource type="Script" path="res://cards/CardManager.gd" id="5_cards"]
+[ext_resource type="Script" uid="uid://ddlpt6r73ksim" path="res://cards/CardManager.gd" id="5_cards"]
 [ext_resource type="Resource" path="res://cards/CardRules.tres" id="6_rules"]
-[ext_resource type="Script" path="res://match/MatchController.gd" id="7_match"]
-[ext_resource type="Script" path="res://shells/ShellStage.gd" id="8_shells"]
+[ext_resource type="Script" uid="uid://m86cojp4qa8o" path="res://board3d/BoardView3D.gd" id="6_v3hs3"]
+[ext_resource type="Script" uid="uid://b45b5yuprm3wn" path="res://match/MatchController.gd" id="7_match"]
+[ext_resource type="Script" uid="uid://bjf6btdb75nsx" path="res://shells/ShellStage.gd" id="8_shells"]
+[ext_resource type="Script" uid="uid://djvt6j2il6h8g" path="res://board3d/CardEffects3D.gd" id="8_x5ji8"]
 
 [node name="MainGame" type="Node2D" unique_id=1938848503]
 
@@ -22,18 +24,31 @@ game = NodePath("../GameManager")
 board = NodePath("../Board")
 pawns_root = NodePath("../Players")
 
-[node name="CardManager" type="Node" parent="." node_paths=PackedStringArray("game", "hud")]
+[node name="CardManager" type="Node" parent="." unique_id=1405716821 node_paths=PackedStringArray("game", "hud", "board_view")]
 script = ExtResource("5_cards")
 game = NodePath("../GameManager")
 hud = NodePath("../HUD")
+board_view = NodePath("../BoardView3D")
 rules_config = ExtResource("6_rules")
 
-[node name="ShellStage" type="Node" parent="." node_paths=PackedStringArray("game", "hud")]
+[node name="BoardView3D" type="Node3D" parent="." unique_id=1155953774 node_paths=PackedStringArray("game", "controller")]
+script = ExtResource("6_v3hs3")
+game = NodePath("../GameManager")
+controller = NodePath("../MatchController")
+
+[node name="ShellStage" type="Node" parent="." unique_id=594283790 node_paths=PackedStringArray("game", "hud", "view")]
 script = ExtResource("8_shells")
 game = NodePath("../GameManager")
 hud = NodePath("../HUD")
+view = NodePath("../BoardView3D")
 
-[node name="MatchController" type="Node" parent="." node_paths=PackedStringArray("game", "hud", "card_manager", "shell_stage")]
+[node name="CardEffects3D" type="Node" parent="." unique_id=1574449217 node_paths=PackedStringArray("card_manager", "view", "shells")]
+script = ExtResource("8_x5ji8")
+card_manager = NodePath("../CardManager")
+view = NodePath("../BoardView3D")
+shells = NodePath("../ShellStage")
+
+[node name="MatchController" type="Node" parent="." unique_id=1010072257 node_paths=PackedStringArray("game", "hud", "shell_stage", "card_manager")]
 script = ExtResource("7_match")
 game = NodePath("../GameManager")
 hud = NodePath("../HUD")

@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://dowmha5vsoa3"]
+
+[ext_resource type="Script" path="res://labs/FigureLab.gd" id="1_8af8l"]
+
+[node name="FigureLab" type="Node3D" unique_id=1832268290]
+script = ExtResource("1_8af8l")

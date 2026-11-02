@@ -1,0 +1,40 @@
+{
+	"title": "How to play",
+	"pages": [
+		{
+			"title": "The goal",
+			"lesson": "home",
+			"body": "Race all four of your pawns from your [b]homebase[/b] (the crossed square on your side) to [b]home[/b], the crossed square in the middle.\n\nThe first player to bring all four pawns home wins."
+		},
+		{
+			"title": "Throwing the cowries",
+			"lesson": "shells",
+			"body": "Hold on the board (or your shells), shake, then flick and let go.\n\nCount the shells that land [b]open side up[/b]: 1, 2 or 3 move that many squares. All four up is [b]Chamma[/b] (4); none up is [b]Ashta[/b] (8).\n\nA 4 or an 8 means [b]throw again[/b]. Your throws add up, and you spend them in any order, on any pawns. But throw 4 or 8 three times in a row and you lose them all."
+		},
+		{
+			"title": "Moving",
+			"lesson": "path",
+			"body": "Pawns go round the [b]outer ring[/b] anticlockwise from your homebase, then turn into the [b]inner ring[/b] and spiral to home.\n\nTo land on home you need the exact throw. A throw no pawn can use is lost."
+		},
+		{
+			"title": "Safe squares",
+			"lesson": "safe",
+			"body": "The nine [b]crossed squares[/b] are safe: nobody can be captured there, and any number of pawns may share one.\n\nOn every other square only one pawn fits: you can't stack your own pawns there."
+		},
+		{
+			"title": "Capturing, and the gate",
+			"lesson": "gate",
+			"body": "Land on an opponent's pawn on a plain square to [b]capture[/b] it: it goes back to its homebase, and you get an extra throw.\n\nThe [b]inner ring is shut[/b] until you've captured someone. Until then your pawns keep circling the outer ring. Your first capture opens the gate."
+		},
+		{
+			"title": "Cards (if the host turns them on)",
+			"lesson": "",
+			"body": "Each player starts with five Ganjifa cards: the host chooses a [b]private pick[/b] (keep 5 of your own 10) or an [b]open draft[/b] (take turns picking from one face-up pool, everyone watching).\n\nPlay at most one card a turn, before you throw. Each card can be used once. Hover or tap a card to read it."
+		},
+		{
+			"title": "Controls",
+			"lesson": "",
+			"body": "[b]Mouse:[/b] point at a pawn to see its move, click to move it. Click a throw to use it next.\n[b]Touch:[/b] tap to see, tap again to do it.\n[b]Keyboard / gamepad:[/b] Space / A to hold and throw, arrows / stick to shake; Left / Right to choose, Enter / A to pick; Up / Down to switch throws; C / Y for your cards; Tab / Back for the log; Esc / B to cancel."
+		}
+	]
+}

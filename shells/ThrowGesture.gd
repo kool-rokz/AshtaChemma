@@ -8,14 +8,16 @@ extends RefCounted
 ## lobby's "skill throws" keep chance (see GameManager.generate_shells).
 
 const SHELL_COUNT := 4
-## Screen area a hand may be in (the logical 1280x720 screen every copy shares).
-const SCREEN := Rect2(0, 0, 1280, 720)
+## Where a hand may be, on the board plane in board units (one square = 1, the board's
+## centre at 0,0, +y towards the bottom seat), the same on every screen whichever side
+## it's viewed from. The board itself is -2.5..2.5; the rest is the mud around it.
+const AREA := Rect2(-4.5, -4.5, 9, 9)
 
-## A click or button press (and bots): a default gentle toss, never any keep chance.
+## A click (and bots): a default gentle toss from the player's own spot, never any keep chance.
 var quick: bool = true
-## Hand position at release, in screen pixels.
+## Hand position at release on the board plane (see AREA).
 var origin: Vector2 = Vector2.ZERO
-## Release direction on the screen (unit length) and strength 0..1.
+## Release direction on the board plane (unit length) and strength 0..1.
 var direction: Vector2 = Vector2.ZERO
 var power: float = 0.35
 ## How much the shells were shaken before release, 0..1.
@@ -39,7 +41,7 @@ static func from_dict(d: Variant) -> ThrowGesture:
 	if not d is Dictionary:
 		return g
 	g.quick = d.get("quick", true) == true
-	g.origin = _vec(d.get("origin"), Vector2.ZERO).clamp(SCREEN.position, SCREEN.end)
+	g.origin = _vec(d.get("origin"), Vector2.ZERO).clamp(AREA.position, AREA.end)
 	var dir := _vec(d.get("direction"), Vector2.ZERO)
 	g.direction = dir.normalized() if dir.length() > 0.001 else Vector2.ZERO
 	g.power = clampf(_num(d.get("power"), 0.35), 0.0, 1.0)

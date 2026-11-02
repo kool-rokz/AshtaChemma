@@ -6,7 +6,7 @@ extends RefCounted
 ## build ignores them all. Pass them after `--`, e.g.
 ##   godot --path . -- --host --autostart=2 --bot --no-mcp
 ##
-##   --host [--port=9080] [--autostart=N] [--no-cards]   host at once (start when N players are in)
+##   --host [--port=9080] [--autostart=N] [--no-cards] [--open-draft]   host at once (start when N players are in)
 ##   --join=ADDRESS                                        join at once (room code or address)
 ##   --name=NAME
 ##   --bot          this window plays its own seat (random legal moves, auto draft)

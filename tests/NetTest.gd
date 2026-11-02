@@ -102,8 +102,11 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 	var taken: String = host["net"].roster[0]["color_name"]
 	machines[1]["net"].request_color(taken) # taken by the host: refused
 	machines[1]["net"].request_color("Green") # free with 2-3 players
+	machines[1]["net"].request_figure("peacock")
+	machines[1]["net"]._rpc_request_figure.rpc_id(1, "dragon") # not a figure: ignored
 	var lobby_synced := func(): return machines.all(func(m): return m["net"].settings.get("cards") == cards \
-		and m["net"].roster.size() == players and m["net"].roster[1]["color_name"] == "Green")
+		and m["net"].roster.size() == players and m["net"].roster[1]["color_name"] == "Green" \
+		and m["net"].roster[1]["figure"] == "peacock")
 	await _wait(lobby_synced, 5.0, "lobby settings and colours to reach everyone")
 	_check(host["net"].roster[0]["color_name"] == taken, "a taken colour can't be requested")
 
@@ -112,6 +115,7 @@ func _run(players: int, cards: bool, port: int, seed_value: int) -> void:
 		return _teardown(machines)
 
 	_check(machines.all(func(m): return m["gm"].setup.throw_skill == "strong"), "the skill-throws setting reaches every copy")
+	_check(machines.all(func(m): return m["gm"].players[1]["figure"] == "peacock"), "a player's figure reaches every copy")
 
 	# Live shaking: only the player whose turn it is is shown (and relayed)
 	machines[1]["net"].send_shake({"holding": true, "pos": [600, 400], "energy": 1.0, "faces": [true, true, true, true]})

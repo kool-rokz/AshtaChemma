@@ -14,6 +14,9 @@ var highlighter: TileHighlighter
 ## Rule hooks shared with GameManager (lets "is_safe" be changed at runtime).
 var rules: RuleHooks = RuleHooks.new()
 var _hovered_tile: int = -1
+## Another view (the 3D board) turns the pointer into tiles and reports them with
+## point_at() / press_tile(); this board's own 2D mouse handling is then off.
+var external_pointer: bool = false
 
 func _ready() -> void:
 	if not board_data:
@@ -26,7 +29,7 @@ func _ready() -> void:
 	add_child(highlighter)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not event is InputEventMouse:
+	if external_pointer or not event is InputEventMouse:
 		return
 	# The event's own position (not the OS cursor), so injected/replayed input works too
 	var tile := get_tile_at(get_canvas_transform().affine_inverse() * event.position)
@@ -38,6 +41,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if tile >= 0:
 			tile_clicked.emit(tile)
+
+## The pointer is over `tile` (-1 = off the board), as worked out by another view.
+func point_at(tile: int) -> void:
+	if tile != _hovered_tile:
+		_hovered_tile = tile
+		highlighter.hovered_tile = tile
+		tile_hovered.emit(tile)
+
+## A click on `tile`, as worked out by another view.
+func press_tile(tile: int) -> void:
+	if tile >= 0:
+		tile_clicked.emit(tile)
 
 ## Returns the global position for a piece to move to.
 func get_square_position(index: int) -> Vector2:

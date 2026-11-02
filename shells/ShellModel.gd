@@ -4,7 +4,7 @@ extends RefCounted
 ## The cowrie shell's look and shape, built in code (swap make_mesh() for a loaded .glb
 ## later). Local axes: Z = the long axis, X = width, +Y = the domed back. The flat belly
 ## (-Y) carries the toothed slit: a shell lies "open side up" when its -Y faces the sky.
-## Sizes are in stage units (1 unit = 100 screen pixels, see ShellStage).
+## Sizes are in board units (one board square = 1).
 
 const LENGTH := 0.36
 const WIDTH := 0.27
@@ -27,7 +27,6 @@ const SLIT_COLOR := Color(0.22, 0.14, 0.09)
 
 static var _mesh_cache: ArrayMesh
 static var _material_cache: StandardMaterial3D
-static var _ghost_cache: StandardMaterial3D
 
 ## Is a shell with this orientation lying open side up?
 static func is_open_up(basis: Basis) -> bool:
@@ -66,29 +65,9 @@ static func _surface_point(phi: float, theta: float) -> Vector3:
 static func rest_height(open_up: bool) -> float:
 	return DOME + CENTER_OF_MASS.y if open_up else BELLY - CENTER_OF_MASS.y
 
-# --- SCENE PIECES (shared by ShellStage over the board and ShellsView in the panel) ---
-## Stage units per screen pixel: the ground plane (y = 0) maps 1:1 onto the screen.
-const UNITS_PER_PIXEL := 0.01
-const CAMERA_HEIGHT := 10.0
+# --- SCENE PIECES (used by ShellStage on the 3D board) ---
+## The ring under a shell that landed open side up.
 const RING_COLOR := Color(1.0, 0.84, 0.35)
-
-static func screen_to_ground(screen: Vector2, height: float = 0.0) -> Vector3:
-	return Vector3(screen.x * UNITS_PER_PIXEL, height, screen.y * UNITS_PER_PIXEL)
-
-static func ground_to_screen(point: Vector3) -> Vector2:
-	return Vector2(point.x, point.z) / UNITS_PER_PIXEL
-
-## A camera looking straight down at `view_rect` (screen pixels) so that the ground
-## plane lines up pixel for pixel with the 2D screen. Shells in the air look bigger.
-static func make_camera(view_rect: Rect2) -> Camera3D:
-	var camera := Camera3D.new()
-	var center := screen_to_ground(view_rect.get_center(), CAMERA_HEIGHT)
-	# Looking down -Y; screen right = +X, screen down = +Z
-	camera.transform = Transform3D(Basis(Vector3.RIGHT, Vector3.FORWARD, Vector3.UP), center)
-	camera.fov = rad_to_deg(2.0 * atan(view_rect.size.y * UNITS_PER_PIXEL / 2.0 / CAMERA_HEIGHT))
-	camera.near = 0.5
-	camera.far = CAMERA_HEIGHT + 2.0
-	return camera
 
 ## Warm key light from the top left plus soft ambient fill.
 static func add_lighting(parent: Node) -> void:
@@ -105,23 +84,6 @@ static func add_lighting(parent: Node) -> void:
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	parent.add_child(world_env)
-
-## A transparent 3D layer (sized by its SubViewportContainer), with its own world.
-static func make_viewport() -> SubViewport:
-	var viewport := SubViewport.new()
-	viewport.transparent_bg = true
-	viewport.own_world_3d = true
-	viewport.msaa_3d = Viewport.MSAA_4X
-	return viewport
-
-## See-through version, for "not thrown yet" placeholders.
-static func ghost_material() -> StandardMaterial3D:
-	if _ghost_cache:
-		return _ghost_cache
-	_ghost_cache = material().duplicate()
-	_ghost_cache.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_ghost_cache.albedo_color = Color(1, 1, 1, 0.22)
-	return _ghost_cache
 
 static func make_shell() -> MeshInstance3D:
 	var shell := MeshInstance3D.new()
@@ -142,36 +104,6 @@ static func make_ring() -> MeshInstance3D:
 	ring.material_override = mat
 	ring.visible = false
 	return ring
-
-## Soft round shadow on the ground (offset and fainter the higher the shell is).
-static func make_shadow() -> MeshInstance3D:
-	var shadow := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(0.44, 0.5)
-	shadow.mesh = plane
-	var gradient := Gradient.new()
-	gradient.set_color(0, Color(0, 0, 0, 0.32))
-	gradient.set_color(1, Color(0, 0, 0, 0))
-	var texture := GradientTexture2D.new()
-	texture.gradient = gradient
-	texture.fill = GradientTexture2D.FILL_RADIAL
-	texture.fill_from = Vector2(0.5, 0.5)
-	texture.fill_to = Vector2(1.0, 0.5)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_texture = texture
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	shadow.material_override = mat
-	return shadow
-
-## Puts a shell's shadow on the ground under it (offset from the light, fainter when high).
-static func place_shadow(shadow: MeshInstance3D, shell_pos: Vector3) -> void:
-	var h := maxf(shell_pos.y, 0.0)
-	shadow.position = Vector3(shell_pos.x + h * 0.25, 0.002, shell_pos.z + h * 0.3)
-	shadow.scale = Vector3.ONE * (1.0 + h * 0.35)
-	var fade := clampf(h * 0.8, 0.0, 0.85)
-	(shadow.material_override as StandardMaterial3D).albedo_color = Color(1, 1, 1, 1.0 - fade)
 
 static func make_mesh() -> ArrayMesh:
 	if _mesh_cache:

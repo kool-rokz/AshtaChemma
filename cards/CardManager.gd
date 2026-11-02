@@ -32,10 +32,14 @@ signal modifier_added(modifier: ActiveModifier)
 signal modifier_expired(modifier: ActiveModifier)
 ## Opens at turn start, closes on the first throw.
 signal play_window_changed(open: bool)
+## The open draft's pool, picks or whose pick changed (see open_pool, open_taken).
+signal open_draft_changed
 
 @export var game: GameManager
 ## Where the card UI adds its log lines and notes.
 @export var hud: HUD
+## Optional: the 3D board, for where played cards land (its discard pile).
+@export var board_view: BoardView3D
 @export var rules_config: CardRulesConfig
 ## Skip the draft screens and keep the first offered cards (tests, simulations).
 @export var auto_draft: bool = false
@@ -43,6 +47,11 @@ signal play_window_changed(open: bool)
 var library: Array[CardData] = []
 ## Per player: Array of CardData still in hand.
 var hands: Array[Array] = []
+## Open draft (GameConfig.DRAFT_OPEN): the face-up pool, who took each slot (-1 = still
+## there), and how many picks have been made. Empty pool = no open draft.
+var open_pool: Array = []
+var open_taken: Array[int] = []
+var open_picks_made: int = 0
 var active_modifiers: Array[ActiveModifier] = []
 ## Total cards played this match (stats).
 var cards_played: int = 0
@@ -108,6 +117,84 @@ func make_offer() -> Array:
 				pool.remove_at(i)
 				break
 	return offer
+
+# --- OPEN DRAFT ---
+## Authority only: the face-up pool for an open draft, hand_size + 1 cards per player
+## (a spare each, so the last pick is still a choice). Drawn by weight like the private
+## offers, with copies allowed (at most one per player of any card), shown grouped.
+func make_open_pool(players: int) -> Array:
+	var count := players * (rules_config.hand_size + 1)
+	var cap := maxi(2, players)
+	var copies := {}
+	var pool: Array = []
+	while pool.size() < count:
+		var candidates: Array = library.filter(func(c): return c.weight > 0.0 and copies.get(c.id, 0) < cap)
+		if candidates.is_empty():
+			break
+		var total := 0.0
+		for card in candidates:
+			total += card.weight
+		var roll := _rng.randf() * total
+		for card in candidates:
+			roll -= card.weight
+			if roll <= 0.0 or card == candidates.back():
+				pool.append(card)
+				copies[card.id] = copies.get(card.id, 0) + 1
+				break
+	pool.sort_custom(func(a, b): return library.find(a) < library.find(b))
+	return pool
+
+## Every copy: the open draft begins with this pool (card ids, from the authority).
+func start_open_draft(ids: Array) -> void:
+	open_pool = ids.map(func(id): return find_card(StringName(id))).filter(func(c): return c != null)
+	open_taken.clear()
+	for i in open_pool.size():
+		open_taken.append(-1)
+	open_picks_made = 0
+	for player in hands.size():
+		hands[player] = []
+	open_draft_changed.emit()
+
+func is_open_draft_started() -> bool:
+	return not open_pool.is_empty()
+
+func is_open_draft_done() -> bool:
+	return is_open_draft_started() and open_draft_picker() < 0
+
+## Whose pick it is (snake order: 0 1 2 2 1 0 0 1 ...), or -1 once everyone holds a hand.
+func open_draft_picker() -> int:
+	var n := game.players.size()
+	var total := mini(n * rules_config.hand_size, open_pool.size())
+	if open_pool.is_empty() or open_picks_made >= total:
+		return -1
+	@warning_ignore("integer_division")
+	var lap := open_picks_made / n
+	var pos := open_picks_made % n
+	return pos if lap % 2 == 0 else n - 1 - pos
+
+## Why `player` can't take `slot` now ("" = they can).
+func get_open_take_block(player: int, slot: int) -> String:
+	if not is_open_draft_started():
+		return "The cards haven't been dealt yet."
+	if player != open_draft_picker():
+		return "It's not your pick."
+	if slot < 0 or slot >= open_pool.size():
+		return "No such card."
+	if open_taken[slot] >= 0:
+		return "That card's already taken."
+	return ""
+
+## The first card still in the pool (bots, absent players), or -1.
+func first_open_slot() -> int:
+	return open_taken.find(-1)
+
+## Every copy: `player` takes the card in `slot` (checked by the authority already).
+func take_from_pool(player: int, slot: int) -> void:
+	open_taken[slot] = player
+	open_picks_made += 1
+	hands[player].append(open_pool[slot])
+	hand_changed.emit(player)
+	open_draft_changed.emit()
 
 ## Lets a player pick from their offer on screen; returns the kept cards.
 ## with_cover: show a "pass to <player>" screen first (one shared screen, offline).
@@ -212,6 +299,10 @@ func request_play_card(card_id: StringName) -> bool:
 
 func is_targeting() -> bool:
 	return not _session.is_empty() and not _session["resolving"]
+
+## Hand index of the card whose targets are being picked (-1 = none).
+func get_targeting_hand_index() -> int:
+	return _session.get("hand_index", -1) if is_targeting() else -1
 
 func get_target_candidates() -> Array:
 	return _session.get("candidates", [])

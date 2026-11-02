@@ -23,6 +23,12 @@ func _run() -> void:
 	_check(not Tunnel.is_room_code("DESKTOP-AB12"), "a PC name is not a room code")
 	_check(not Tunnel.is_room_code("192.168.1.5:9080"), "an address is not a room code")
 	_check(Tunnel.code_to_url(" Brave-Lemon-Kite-Maple ") == "wss://brave-lemon-kite-maple.trycloudflare.com", "codes become tunnel URLs")
+	var ws := WebSocketTransport.new()
+	_check(ws.to_target("192.168.1.5") == "ws://192.168.1.5:%d" % WebSocketTransport.DEFAULT_PORT, "a bare address gets the default port")
+	_check(ws.to_target("brave-lemon-kite-maple") == "wss://brave-lemon-kite-maple.trycloudflare.com", "the transport turns room codes into tunnel URLs")
+	_check(ws.find_address("Join my game! Room code: brave-lemon-kite-maple.") == "brave-lemon-kite-maple", "an invite message gives its room code")
+	_check(ws.find_address("https://x.itch.io/game?room=brave-lemon-kite-maple&y=1") == "brave-lemon-kite-maple", "an invite link gives its room code")
+	_check(ws.to_target("") == "", "nothing typed is no address")
 
 	var server := WebSocketMultiplayerPeer.new()
 	_check(server.create_server(PORT) == OK, "local test server should start")

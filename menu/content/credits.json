@@ -1,0 +1,22 @@
+{
+	"title": "Credits",
+	"sections": [
+		{
+			"title": "Ashta Chemma",
+			"body": "A traditional Indian courtyard game, made by Shashank Bukka.\nBuilt with the Godot Engine."
+		},
+		{
+			"title": "Lettering",
+			"body": "Yatra One, Laila, Kalam and Ramaraja, under the SIL Open Font License 1.1 (licence files in assets/fonts)."
+		},
+		{
+			"title": "Sound",
+			"body": "Music and sounds made for the game from scratch, with SoX, FFmpeg, Python and FluidSynth. Instruments from the GeneralUser GS SoundFont by S. Christian Collins."
+		},
+		{
+			"title": "Online rooms",
+			"body": "Room codes use Cloudflare quick tunnels through cloudflared (Apache License 2.0), fetched on hosts that need it."
+		}
+	],
+	"engine_licence": true
+}
