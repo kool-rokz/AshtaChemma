@@ -32,9 +32,9 @@ func _ready() -> void:
 	add_child(_body)
 	_counter = MenuStyle.label("", 15, MenuStyle.INK_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	add_child(_counter)
-	_prev = MenuStyle.button("◀ Back")
+	_prev = MenuStyle.button("< Back")
 	_prev.pressed.connect(_step.bind(-1))
-	_next = MenuStyle.button("Next ▶")
+	_next = MenuStyle.button("Next >")
 	_next.name = "NextPage"
 	_next.pressed.connect(_step.bind(1))
 	add_child(MenuStyle.button_row([_prev, _next]))
@@ -70,6 +70,6 @@ func _show_page() -> void:
 	_heading.text = String(page.get("title", ""))
 	_body.text = String(page.get("body", ""))
 	_counter.text = "%d / %d" % [_page + 1, _pages.size()]
-	_prev.text = "◀ Back" if _page > 0 else "◀ Menu"
-	_next.text = "Next ▶" if _page < _pages.size() - 1 else "Done"
+	_prev.text = "< Back" if _page > 0 else "< Menu"
+	_next.text = "Next >" if _page < _pages.size() - 1 else "Done"
 	stage.show_lesson(String(page.get("lesson", "")))

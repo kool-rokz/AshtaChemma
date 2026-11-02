@@ -8,7 +8,10 @@ extends Node
 ##     (one picked at random, with a slight change of pitch, so repeats don't sound copied)
 ##   - music: res://assets/audio/music/<id>.ogg, looped, faded in and crossfaded
 ##   - ambience: an effects-level loop (crickets at dusk, birds at dawn)
-## Two buses, Music and Effects (made here at runtime), set from Settings. Silent and
+## Two buses, Music and Effects, set from Settings. They're declared in
+## res://default_bus_layout.tres, loaded at startup: the web build only wires up buses
+## that exist when the game starts (buses added later stay silent there). _add_bus is
+## only a fallback. Silent and
 ## absent when headless (tests). The audio files are made by the AshtaChemmaArt audio
 ## pipeline (its build.sh --install), and can be swapped for a sound designer's files
 ## with the same names.

@@ -22,14 +22,14 @@ func _ready() -> void:
 	add_child(MenuStyle.row("Your name", _name_edit))
 	_name_edit.custom_minimum_size.x = 240
 
-	var prev := MenuStyle.button("◀", 56)
+	var prev := MenuStyle.button("<", 56)
 	prev.name = "PrevFigure"
 	prev.pressed.connect(_step_figure.bind(-1))
 	_figure_label = MenuStyle.label("", 22, MenuStyle.INK, HORIZONTAL_ALIGNMENT_CENTER)
 	_figure_label.add_theme_font_override("font", GameFonts.title())
 	_figure_label.custom_minimum_size.x = 140
 	_figure_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	var next := MenuStyle.button("▶", 56)
+	var next := MenuStyle.button(">", 56)
 	next.name = "NextFigure"
 	next.pressed.connect(_step_figure.bind(1))
 	var chooser := HBoxContainer.new()
